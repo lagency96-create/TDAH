@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Esprit TDAH IA</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0f1a;
+    --fg:#eaf2ff;
+    --muted:#a9b8d9;
+    --grad1:#2F80ED;
+    --grad2:#3BD3FF;
+    --panel:rgba(255,255,255,0.06);
+    --border:rgba(255,255,255,0.12);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    background: radial-gradient(1200px 700px at 50% -10%, #0f1630 0%, transparent 60%), var(--bg);
+    color:var(--fg);
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+  }
+  header{display:flex; gap:12px; align-items:center; padding:28px 16px 8px}
+  .brain{width:36px; height:36px; background:url('https://upload.wikimedia.org/wikipedia/commons/7/79/Brain_icon.svg') center/contain no-repeat; filter: drop-shadow(0 0 6px var(--grad2));}
+  h1{margin:0; font-size:clamp(22px,3.4vw,28px); font-weight:700;
+     background:linear-gradient(90deg,var(--grad2),var(--grad1)); -webkit-background-clip:text; background-clip:text; color:transparent;}
+  .sub{margin:6px 0 16px; color:var(--muted); text-align:center; padding:0 18px}
+  #chat{
+    width:min(92vw,760px); height:58vh; overflow:auto; padding:18px;
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    box-shadow:0 0 40px #2f80ed22;
+  }
+  .msg{margin:12px 0; line-height:1.55}
+  .user{color:var(--grad2)}
+  .ai{color:#fff}
+  #inputZone{display:flex; gap:8px; width:min(92vw,760px); margin:14px 0 28px}
+  textarea{
+    flex:1; height:56px; resize:none; padding:12px; border-radius:12px; border:1px solid var(--border);
+    background:#121a2f; color:#fff; outline:none; font:15px/1.5 Inter,system-ui;
+  }
+  button{
+    width:120px; border:0; border-radius:12px; cursor:pointer; font-weight:700; color:#fff;
+    background:linear-gradient(135deg,var(--grad1),var(--grad2)); box-shadow:0 16px 32px #2f80ed44; 
+  }
+  footer{margin:12px 0 24px; color:var(--muted); font-size:12px}
+  canvas#neurons{position:fixed; inset:0; z-index:-1; opacity:.35}
+</style>
+</head>
+<body>
+  <canvas id="neurons"></canvas>
+  <header>
+    <div class="brain"></div>
+    <h1>Esprit TDAH IA</h1>
+  </header>
+  <p class="sub">Assistant IA spécialisé: réponses courtes, actions concrètes, mini‑plans en 3 étapes. (Démo branchée sur /chat)</p>
+
+  <div id="chat"></div>
+
+  <div id="inputZone">
+    <textarea id="message" placeholder="Écris ton message… (ex: aide-moi à finir un mail en 20 min)"></textarea>
+    <button id="send">Envoyer</button>
+  </div>
+
+  <footer>© 2025 Esprit TDAH — Prototype</footer>
+
+<script>
+  // API locale (servie par server.js)
+  const CHAT_API = "/chat";
+
+  const chat = document.getElementById("chat");
+  const input = document.getElementById("message");
+  const send = document.getElementById("send");
+
+  function addMsg(role, text){
+    const d=document.createElement("div");
+    d.className = "msg " + role;
+    d.textContent = (role==="user" ? "Toi : " : "IA : ") + text;
+    chat.appendChild(d);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  async function sendMessage(){
+    const text = input.value.trim();
+    if(!text) return;
+    addMsg("user", text);
+    input.value = "";
+    try{
+      const res = await fetch(CHAT_API, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:text})
+      });
+      const data = await res.json().catch(()=>({answer:"Erreur de parsing"}));
+      addMsg("ai", data.answer || "Erreur, réessaie.");
+    }catch(e){
+      addMsg("ai", "⚠️ Impossible de joindre le serveur.");
+    }
+  }
+
+  send.addEventListener("click", sendMessage);
+  input.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); }});
+
+  // fond "connexions neuronales"
+  const c=document.getElementById("neurons"), ctx=c.getContext("2d");
+  let w,h,parts=[];
+  function resize(){ w=c.width=innerWidth; h=c.height=innerHeight;
+    parts = Array.from({length:80}, ()=>({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.7,vy:(Math.random()-.5)*.7}));
+  }
+  addEventListener("resize", resize); resize();
+  function tick(){
+    ctx.clearRect(0,0,w,h);
+    for(const p of parts){
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<0||p.x>w) p.vx*=-1; if(p.y<0||p.y>h) p.vy*=-1;
+      ctx.fillStyle="#3BD3FF"; ctx.beginPath(); ctx.arc(p.x,p.y,1.6,0,6.283); ctx.fill();
+    }
+    for(let i=0;i<parts.length;i++){
+      for(let j=i+1;j<parts.length;j++){
+        const a=parts[i], b=parts[j]; const dx=a.x-b.x, dy=a.y-b.y, d=Math.hypot(dx,dy);
+        if(d<120){ ctx.strokeStyle=`rgba(47,128,237,${1-d/120})`; ctx.lineWidth=.4; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  tick();
+</script>
+</body>
+</html>
