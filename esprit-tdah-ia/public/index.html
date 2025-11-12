@@ -21,11 +21,9 @@
       color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
       background:linear-gradient(180deg,var(--bg0)0%,var(--bg1)60%,var(--bg2)100%);
-      width:100%; min-height:100dvh; display:flex;
+      width:100%; min-height:100dvh; display:flex; flex-direction:column;
     }
     @supports (height: 100svh){ .tdai-app{ min-height:100svh; } }
-
-    .tdai-wrap{flex:1;display:flex;flex-direction:column;width:100%}
 
     .tdai-top{
       display:flex;justify-content:space-between;align-items:center;gap:12px;
@@ -40,29 +38,27 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Zone chat qui scrolle */
+    /* Zone chat (la hauteur est fixée dynamiquement en JS) */
     .tdai-chat{
-      flex:1;min-height:0;overflow:auto;padding:16px;
+      overflow:auto;padding:16px;
       display:flex;flex-direction:column;scroll-behavior:smooth;
       overscroll-behavior:contain; touch-action:pan-y;
+      -webkit-overflow-scrolling:touch;
     }
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
 
-    /* Ligne de message */
+    /* Messages */
     .tdai-msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
-    /* IA à gauche (par défaut) */
     .tdai-msg.assistant{flex-direction:row}
-    /* Utilisateur : bulle poussée à droite */
     .tdai-msg.user{flex-direction:row}
-    .tdai-msg.user .tdai-bub{ margin-left:auto; }     /* ⟵ clef alignement à droite */
+    .tdai-msg.user .tdai-bub{ margin-left:auto; }   /* utilisateur à droite */
     .tdai-msg.assistant .tdai-bub{ margin-right:auto; }
 
     .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;
       display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
-    /* Pas d'avatar côté utilisateur */
-    .tdai-msg.user .tdai-ava{ display:none }
+    .tdai-msg.user .tdai-ava{ display:none }        /* pas de “Toi” */
 
     .tdai-bub{
       background:var(--bubA);border:1px solid var(--br);border-radius:14px;
@@ -100,159 +96,171 @@
     .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
   </style>
 
-  <div class="tdai-wrap">
-    <div class="tdai-top">
-      <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
-      <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
-    </div>
+  <div class="tdai-top">
+    <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
+    <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
+  </div>
 
-    <div id="tdai-chat" class="tdai-chat" aria-live="polite">
-      <div class="tdai-msg assistant">
-        <div class="tdai-ava">IA</div>
-        <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
-      </div>
-    </div>
-
-    <div id="tdai-previews" class="tdai-previews"></div>
-
-    <div class="tdai-compose">
-      <form id="tdai-form" class="tdai-inwrap" autocomplete="off">
-        <textarea id="tdai-input" class="tdai-input" rows="1" placeholder="Écris ton message…"></textarea>
-        <div class="tdai-actions">
-          <input type="file" id="tdai-file" accept="image/*" multiple hidden>
-          <button type="button" class="tdai-ibtn" id="tdai-photo">📷</button>
-          <button type="button" class="tdai-ibtn" id="tdai-clear">✕</button>
-          <button type="submit" class="tdai-send" id="tdai-sendBtn">➤ <span>Envoyer</span></button>
-        </div>
-      </form>
-      <div class="tdai-hint">Formats conseillés : JPG/PNG — jusqu’à 3 images par message</div>
+  <div id="tdai-chat" class="tdai-chat" aria-live="polite">
+    <div class="tdai-msg assistant">
+      <div class="tdai-ava">IA</div>
+      <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
     </div>
   </div>
 
-  <script>
-    const API_URL="https://tdah-ia.onrender.com/chat";
-    const chatEl=document.getElementById("tdai-chat");
-    const formEl=document.getElementById("tdai-form");
-    const inputEl=document.getElementById("tdai-input");
-    const clearEl=document.getElementById("tdai-clear");
-    const sendBtn=document.getElementById("tdai-sendBtn");
-    const fileBtn=document.getElementById("tdai-photo");
-    const fileInput=document.getElementById("tdai-file");
-    const previews=document.getElementById("tdai-previews");
-    const composeEl = document.querySelector('.tdai-compose');
-    let imagesData=[]; let pending=false;
+  <div id="tdai-previews" class="tdai-previews"></div>
 
-    /* ——— Barre fixe iPhone : on réserve l’espace + ancrage en bas ——— */
-    function padForComposer(extra=0){
-      const h = (composeEl?.getBoundingClientRect().height || 0) + extra;
-      chatEl.style.paddingBottom = (h + 18) + 'px';   /* marge de sécu en plus */
-    }
-    function scrollToBottom(){
-      // double RAF = plus fiable sur iOS pour scroller tout en bas
-      requestAnimationFrame(()=>requestAnimationFrame(()=>{
-        chatEl.scrollTop = chatEl.scrollHeight;
-      }));
-    }
-    if (window.visualViewport){
-      visualViewport.addEventListener('resize', () => { padForComposer(visualViewport.height<700?24:0); scrollToBottom(); });
-      visualViewport.addEventListener('scroll', () => padForComposer());
-    }
-    window.addEventListener('resize', padForComposer);
-    window.addEventListener('orientationchange', padForComposer);
-    inputEl.addEventListener('focus', () => setTimeout(() => { padForComposer(24); scrollToBottom(); }, 50));
-    inputEl.addEventListener('input', () => { padForComposer(); scrollToBottom(); });
-    inputEl.addEventListener('blur', () => setTimeout(()=>padForComposer(), 100));
-    padForComposer();
-
-    function addMsg(role,text){
-      const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
-      const ava=document.createElement("div");ava.className="tdai-ava";
-      ava.textContent = (role==="assistant") ? "IA" : "";
-      const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
-      wrap.appendChild(ava);wrap.appendChild(bub);
-      chatEl.appendChild(wrap);
-      scrollToBottom(); padForComposer();
-    }
-
-    function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
-    inputEl.addEventListener("input",()=>autosize(inputEl));autosize(inputEl);
-
-    fileBtn.addEventListener("click",()=>fileInput.click());
-    fileInput.addEventListener("change",async e=>{
-      const files=Array.from(e.target.files||[]);
-      for(const f of files.slice(0,3-imagesData.length)){
-        if(!f.type.startsWith("image/"))continue;
-        const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
-        imagesData.push(dataUrl);
-      }
-      renderPreviews();fileInput.value="";
-    });
-
-    function renderPreviews(){
-      previews.innerHTML="";
-      imagesData.forEach((url,i)=>{
-        const box=document.createElement("div");box.className="tdai-thumb";
-        const img=document.createElement("img");img.src=url;
-        const x=document.createElement("button");x.className="tdai-x";x.textContent="×";
-        x.onclick=()=>{imagesData.splice(i,1);renderPreviews();};
-        box.appendChild(img);box.appendChild(x);
-        previews.appendChild(box);
-      });
-    }
-
-    formEl.addEventListener("submit",async e=>{
-      e.preventDefault();
-      const msg=inputEl.value.trim();
-      if(pending) return;                // anti double-envoi
-      if(!msg && imagesData.length===0) return;
-
-      if(msg) addMsg("user",msg);
-      if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
-      inputEl.value=""; autosize(inputEl); previews.innerHTML="";
-      pending=true; sendBtn.disabled=true;
-
-      try{
-        const r=await fetch(API_URL,{
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({message:msg,images:imagesData})
-        });
-        imagesData=[];
-        const data=await r.json().catch(()=>({}));
-
-        if(!r.ok){
-          const detail = (data && (data.error||data.detail)) ? ` (${data.error||data.detail})` : "";
-          addMsg("assistant","Erreur serveur."+detail);
-        }else{
-          /* ✅ gère answer | reply | choices */
-          const reply = data.answer
-            || data.reply
-            || data.choices?.[0]?.message?.content
-            || "…";
-          addMsg("assistant", reply);
-        }
-      }catch(err){
-        console.error(err);
-        addMsg("assistant","Erreur réseau.");
-      }finally{
-        pending=false; sendBtn.disabled=false;
-        padForComposer();
-      }
-    });
-
-    inputEl.addEventListener("keydown",e=>{
-      if(e.key==="Enter"&&!e.shiftKey){
-        e.preventDefault();
-        formEl.dispatchEvent(new Event("submit",{cancelable:true}));
-      }
-    });
-
-    clearEl?.addEventListener("click",()=>{
-      chatEl.innerHTML="";imagesData=[];previews.innerHTML="";
-      addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
-    });
-  </script>
+  <div class="tdai-compose">
+    <form id="tdai-form" class="tdai-inwrap" autocomplete="off">
+      <textarea id="tdai-input" class="tdai-input" rows="1" placeholder="Écris ton message…"></textarea>
+      <div class="tdai-actions">
+        <input type="file" id="tdai-file" accept="image/*" multiple hidden>
+        <button type="button" class="tdai-ibtn" id="tdai-photo">📷</button>
+        <button type="button" class="tdai-ibtn" id="tdai-clear">✕</button>
+        <button type="submit" class="tdai-send" id="tdai-sendBtn">➤ <span>Envoyer</span></button>
+      </div>
+    </form>
+    <div class="tdai-hint">Formats conseillés : JPG/PNG — jusqu’à 3 images par message</div>
+  </div>
 </div>
+
+<script>
+  const API_URL="https://tdah-ia.onrender.com/chat";
+  const chatEl=document.getElementById("tdai-chat");
+  const formEl=document.getElementById("tdai-form");
+  const inputEl=document.getElementById("tdai-input");
+  const clearEl=document.getElementById("tdai-clear");
+  const sendBtn=document.getElementById("tdai-sendBtn");
+  const fileBtn=document.getElementById("tdai-photo");
+  const fileInput=document.getElementById("tdai-file");
+  const previews=document.getElementById("tdai-previews");
+  const headerEl=document.querySelector('.tdai-top');
+  const composeEl=document.querySelector('.tdai-compose');
+
+  let imagesData=[]; let pending=false;
+
+  /* --------- Layout iPhone : calcule la vraie hauteur disponible --------- */
+  function layout(){
+    const vpH = (window.visualViewport?.height || window.innerHeight);
+    const headH = headerEl?.getBoundingClientRect().height || 0;
+    const compH = composeEl?.getBoundingClientRect().height || 0;
+    const safe = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-b')) || 0;
+
+    // Hauteur dispo = viewport - header - composer - petite marge
+    const available = Math.max(200, vpH - headH - compH - 8);
+    chatEl.style.height = available + 'px';
+
+    // Petite marge interne pour que la dernière bulle ne passe jamais sous le composer
+    chatEl.style.paddingBottom = (8 + safe) + 'px';
+  }
+
+  // Observateurs (composer peut changer de taille avec le clavier)
+  const ro1 = new ResizeObserver(layout);
+  const ro2 = new ResizeObserver(layout);
+  ro1.observe(composeEl);
+  ro2.observe(headerEl);
+
+  if (window.visualViewport){
+    visualViewport.addEventListener('resize', layout);
+    visualViewport.addEventListener('scroll', layout);
+  }
+  window.addEventListener('orientationchange', layout);
+  window.addEventListener('resize', layout);
+  document.addEventListener('DOMContentLoaded', layout);
+  setTimeout(layout, 50);
+
+  function scrollToBottom(){
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }));
+  }
+
+  /* --------- UI messages --------- */
+  function addMsg(role,text){
+    const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
+    const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=(role==="assistant")?"IA":"";
+    const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
+    wrap.appendChild(ava);wrap.appendChild(bub);
+    chatEl.appendChild(wrap);
+    scrollToBottom(); layout();
+  }
+
+  function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
+  inputEl.addEventListener("input",()=>{autosize(inputEl); layout();});
+  autosize(inputEl);
+
+  fileBtn.addEventListener("click",()=>fileInput.click());
+  fileInput.addEventListener("change",async e=>{
+    const files=Array.from(e.target.files||[]);
+    for(const f of files.slice(0,3-imagesData.length)){
+      if(!f.type.startsWith("image/"))continue;
+      const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
+      imagesData.push(dataUrl);
+    }
+    renderPreviews();fileInput.value="";
+  });
+
+  function renderPreviews(){
+    previews.innerHTML="";
+    imagesData.forEach((url,i)=>{
+      const box=document.createElement("div");box.className="tdai-thumb";
+      const img=document.createElement("img");img.src=url;
+      const x=document.createElement("button");x.className="tdai-x";x.textContent="×";
+      x.onclick=()=>{imagesData.splice(i,1);renderPreviews();};
+      box.appendChild(img);box.appendChild(x);
+      previews.appendChild(box);
+    });
+  }
+
+  /* --------- Envoi --------- */
+  formEl.addEventListener("submit",async e=>{
+    e.preventDefault();
+    const msg=inputEl.value.trim();
+    if(pending) return;
+    if(!msg && imagesData.length===0) return;
+
+    if(msg) addMsg("user",msg);
+    if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
+    inputEl.value=""; autosize(inputEl); previews.innerHTML="";
+    pending=true; sendBtn.disabled=true;
+
+    try{
+      const r=await fetch(API_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:msg,images:imagesData})
+      });
+      imagesData=[];
+      const data=await r.json().catch(()=>({}));
+
+      if(!r.ok){
+        const detail = (data && (data.error||data.detail)) ? ` (${data.error||data.detail})` : "";
+        addMsg("assistant","Erreur serveur."+detail);
+      }else{
+        const reply = data.answer || data.reply || data.choices?.[0]?.message?.content || "…";
+        addMsg("assistant", reply);
+      }
+    }catch(err){
+      console.error(err);
+      addMsg("assistant","Erreur réseau.");
+    }finally{
+      pending=false; sendBtn.disabled=false;
+      layout();
+    }
+  });
+
+  inputEl.addEventListener("keydown",e=>{
+    if(e.key==="Enter"&&!e.shiftKey){
+      e.preventDefault();
+      formEl.dispatchEvent(new Event("submit",{cancelable:true}));
+    }
+  });
+
+  clearEl?.addEventListener("click",()=>{
+    chatEl.innerHTML="";imagesData=[];previews.innerHTML="";
+    addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
+  });
+</script>
 
 </body>
 </html>
