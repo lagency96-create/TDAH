@@ -1,9 +1,8 @@
 <div class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;">
   <style>
     html,body{margin:0;padding:0;background:#0c0f19;overflow:hidden;height:100%;width:100%}
-    :root{--safe-b:env(safe-area-inset-bottom,4px)} /* marge iPhone minimale */
+    :root{--safe-b:env(safe-area-inset-bottom,4px)}
 
-    /* App plein écran */
     .tdai-app{
       color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
@@ -12,7 +11,6 @@
     }
     .tdai-wrap{flex:1;display:flex;flex-direction:column;width:100%}
 
-    /* Header */
     .tdai-top{display:flex;justify-content:space-between;align-items:center;gap:12px;
       padding:12px 16px;border-bottom:1px solid var(--br);position:sticky;top:0;
       background:rgba(12,15,25,.9);backdrop-filter:saturate(120%) blur(8px);z-index:5}
@@ -24,7 +22,6 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:12px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Zone chat */
     .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth}
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
@@ -37,13 +34,11 @@
       word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25)}
     .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
 
-    /* Prévisualisations images */
     .tdai-previews{display:flex;gap:8px;flex-wrap:wrap;margin:10px 12px}
     .tdai-thumb{position:relative;width:84px;height:84px;border:1px solid var(--br);border-radius:10px;overflow:hidden;background:#0e1530}
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Composer : padding bas MINIMAL */
     .tdai-compose{
       position:sticky;bottom:0;background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
       padding:10px 10px calc(8px + var(--safe-b))
