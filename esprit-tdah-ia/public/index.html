@@ -10,13 +10,10 @@
 <div class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;">
   <style>
     html,body{
-      margin:0;padding:0;
-      background:#0c0f19;
-      overflow:hidden;
-      height:100%;width:100%;
+      margin:0;padding:0;background:#0c0f19;height:100%;width:100%;
       font-size:clamp(16px,1.8vh + 0.5rem,18px);
-      -webkit-text-size-adjust:100%;
-      text-size-adjust:100%;
+      -webkit-text-size-adjust:100%; text-size-adjust:100%;
+      overflow:hidden; /* on laisse scroller le chat, pas la page */
     }
 
     :root{--safe-b:env(safe-area-inset-bottom,4px)}
@@ -28,12 +25,8 @@
       width:100%;
       min-height:100dvh;
       display:flex;
-      overflow:hidden;
     }
-    /* iPhone: garde la bonne hauteur quand le clavier s’ouvre */
-    @supports (height: 100svh){
-      .tdai-app{ min-height:100svh; }
-    }
+    @supports (height: 100svh){ .tdai-app{ min-height:100svh; } }
 
     .tdai-wrap{flex:1;display:flex;flex-direction:column;width:100%}
 
@@ -48,27 +41,47 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth;
-      overscroll-behavior:contain;}
+    /* Zone chat qui scrolle */
+    .tdai-chat{
+      flex:1;min-height:0;overflow:auto;padding:16px;
+      display:flex;flex-direction:column;scroll-behavior:smooth;
+      overscroll-behavior:contain;
+    }
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
 
-    .tdai-msg{display:flex;gap:10px;margin:10px 0}
-    .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
+    /* Lignes de message */
+    .tdai-msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
+    /* IA à gauche (par défaut) */
+    .tdai-msg.assistant{flex-direction:row;justify-content:flex-start}
+    /* Toi à droite */
+    .tdai-msg.user{flex-direction:row-reverse;justify-content:flex-end}
+
+    .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;
+      display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
     .tdai-msg.user .tdai-ava{background:linear-gradient(135deg,#50b1ff,#6a7dff)}
-    .tdai-bub{background:var(--bubA);border:1px solid var(--br);border-radius:14px;padding:12px 14px;max-width:90%;
-      word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:17px;line-height:1.7}
+
+    .tdai-bub{
+      background:var(--bubA);border:1px solid var(--br);border-radius:14px;
+      padding:12px 14px;max-width:90%;
+      word-wrap:break-word;white-space:pre-wrap;
+      box-shadow:0 10px 30px rgba(0,0,0,.25);
+      font-size:17px;line-height:1.7
+    }
     .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
 
+    /* Prévisualisations images */
     .tdai-previews{display:flex;gap:8px;flex-wrap:wrap;margin:10px 12px}
     .tdai-thumb{position:relative;width:84px;height:84px;border:1px solid var(--br);border-radius:10px;overflow:hidden;background:#0e1530}
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
+    /* Barre de saisie FIXÉE en bas (plus de disparition) */
     .tdai-compose{
-      position:sticky;bottom:0;background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
-      padding:10px 10px calc(8px + var(--safe-b))
+      position:fixed;left:0;right:0;bottom:0;z-index:10;
+      background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
+      padding:10px 10px calc(8px + var(--safe-b));
     }
     .tdai-inwrap{display:flex;gap:10px;align-items:flex-end;background:rgba(20,26,52,.75);border:1px solid var(--br);
       border-radius:16px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
@@ -79,7 +92,7 @@
     .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:12px 18px;border-radius:12px;border:1px solid #33407a;
       background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
-    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:13px;text-align:center}
+    .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
 
     @media(max-width:768px){
       .tdai-title{font-size:18px}
@@ -131,7 +144,7 @@
     const previews=document.getElementById("tdai-previews");
     let imagesData=[];
 
-    /* Tweak iPhone: calcul du padding bas + ancrage auto au dernier message */
+    /* Fix iPhone : on réserve l’espace de la barre fixée et on reste en bas */
     const composeEl = document.querySelector('.tdai-compose');
     function padForComposer(){
       const h = composeEl?.getBoundingClientRect().height || 0;
