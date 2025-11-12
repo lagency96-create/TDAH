@@ -51,7 +51,7 @@ app.post("/chat", async (req, res) => {
 
     const j = await r.json();
     const answer = j.choices?.[0]?.message?.content || "Désolé, pas de réponse.";
-    res.json({ answer });
+res.json({ reply: answer });
   } catch (e) {
     res.status(500).json({ error: "server_error", detail: String(e) });
   }
