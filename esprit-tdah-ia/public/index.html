@@ -5,18 +5,22 @@
   <title>TDAI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <style>
+    :root{
+      --bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;
+      --txt:#e9ebf3;--dim:#a7afc7;--br:#232a4d;--brand:#6a7dff;--acc:#5be7c4;
+      --safe-b:env(safe-area-inset-bottom,0px);
+      --composer-h:140px;  /* sera recalculé dynamiquement */
+    }
+
     html,body{
-      margin:0;padding:0;background:#0c0f19;color:#e9ebf3;
+      margin:0;padding:0;background:var(--bg0);color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
       -webkit-text-size-adjust:100%; text-size-adjust:100%;
-      /* IMPORTANT: la page peut défiler */
-      overflow:auto; overscroll-behavior-y: contain;
+      overflow:auto; overscroll-behavior-y:contain;
     }
-    :root{ --safe-b: env(safe-area-inset-bottom,0px); --composer-h: 140px; }
-
     .tdai-app{
       min-height:100dvh; display:flex; flex-direction:column;
-      background:linear-gradient(180deg,#0c0f19 0%,#0f1424 60%,#121831 100%);
+      background:linear-gradient(180deg,var(--bg0) 0%,var(--bg1) 60%,var(--bg2) 100%);
     }
     @supports(height:100svh){ .tdai-app{ min-height:100svh; } }
 
@@ -24,20 +28,21 @@
     .tdai-top{
       position:sticky; top:0; z-index:5;
       display:flex; justify-content:space-between; align-items:center; gap:12px;
-      padding:12px 16px; border-bottom:1px solid #232a4d;
+      padding:12px 16px; border-bottom:1px solid var(--br);
       background:rgba(12,15,25,.9); backdrop-filter:saturate(120%) blur(8px);
     }
     .tdai-brand{display:flex;align-items:center;gap:10px}
     .tdai-logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#0e1330;
-      background:linear-gradient(135deg,#6a7dff,#5be7c4);box-shadow:0 6px 18px rgba(106,125,255,.35)}
+      background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 6px 18px rgba(106,125,255,.35)}
     .tdai-title{margin:0;font-size:18px;font-weight:700}
-    .tdai-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid #232a4d;border-radius:999px;
+    .tdai-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--br);border-radius:999px;
       padding:6px 10px;background:rgba(20,26,52,.6);font-size:13px}
-    .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,#6a7dff,#5be7c4);box-shadow:0 0 10px #5be7c4}
+    .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Chat en flux normal (PAGE scroll), avec padding bas = hauteur composer */
+    /* Zone chat : padding-bottom = hauteur composer */
     .tdai-chat{
-      padding:16px; padding-bottom:calc(var(--composer-h) + 16px + var(--safe-b));
+      padding:16px;
+      padding-bottom:calc(var(--composer-h) + 16px + var(--safe-b));
       display:flex; flex-direction:column; gap:10px;
       scroll-behavior:smooth; -webkit-overflow-scrolling:touch; touch-action:pan-y;
     }
@@ -46,11 +51,10 @@
     .tdai-msg.assistant .tdai-bub{margin-right:auto}
     .tdai-msg.user .tdai-bub{margin-left:auto}
     .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
-    .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,#6a7dff,#5be7c4)}
+    .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
     .tdai-msg.user .tdai-ava{display:none}
-
     .tdai-bub{
-      background:#161f3d;border:1px solid #232a4d;border-radius:14px;
+      background:#161f3d;border:1px solid var(--br);border-radius:14px;
       padding:12px 14px;max-width:90%;
       word-wrap:break-word;white-space:pre-wrap;
       box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:17px;line-height:1.7;
@@ -58,31 +62,32 @@
     .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,#0b2c55,#0a2244);border-color:#1b3b72}
 
     .tdai-previews{display:flex;gap:8px;flex-wrap:wrap;margin:4px 12px}
-    .tdai-thumb{position:relative;width:84px;height:84px;border:1px solid #232a4d;border-radius:10px;overflow:hidden;background:#0e1530}
+    .tdai-thumb{position:relative;width:84px;height:84px;border:1px solid var(--br);border-radius:10px;overflow:hidden;background:#0e1530}
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Composer collé en bas mais STICKY (meilleur sous iOS que fixed) */
+    /* Composer : par défaut STICKY (desktop/Android) */
     .tdai-compose{
       position:sticky; bottom:0; z-index:10;
       background:rgba(12,15,25,.96); backdrop-filter:blur(8px);
       padding:10px 10px calc(10px + var(--safe-b));
       box-shadow:0 -6px 24px rgba(0,0,0,.25);
+      transform:translateZ(0); /* empêche les sauts sur iOS */
     }
-    .tdai-inwrap{display:flex;gap:10px;align-items:flex-end;background:rgba(20,26,52,.75);border:1px solid #232a4d;
+    .tdai-inwrap{display:flex;gap:10px;align-items:flex-end;background:rgba(20,26,52,.75);border:1px solid var(--br);
       border-radius:16px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-    .tdai-input{flex:1;min-height:44px;max-height:160px;resize:none;border:0;outline:none;background:transparent;color:#e9ebf3;padding:6px 8px;font-size:16px}
+    .tdai-input{flex:1;min-height:44px;max-height:160px;resize:none;border:0;outline:none;background:transparent;color:var(--txt);padding:6px 8px;font-size:16px}
     .tdai-actions{display:flex;gap:8px;align-items:center}
-    .tdai-ibtn{width:40px;height:40px;border:1px solid #232a4d;border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
+    .tdai-ibtn{width:40px;height:40px;border:1px solid var(--br);border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
     .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:12px 18px;border-radius:12px;border:1px solid #33407a;
-      background:linear-gradient(135deg,#6a7dff,#5be7c4);color:#0e1330;font-weight:600;cursor:pointer;
+      background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
-    .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
+    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:13px;text-align:center}
   </style>
 </head>
 <body>
   <div class="tdai-app" id="app">
-    <div class="tdai-top" id="tdai-top">
+    <div class="tdai-top">
       <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
       <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
     </div>
@@ -114,7 +119,6 @@
   <script>
     const API_URL="https://tdah-ia.onrender.com/chat";
 
-    const appEl=document.getElementById('app');
     const chatEl=document.getElementById('tdai-chat');
     const bottomEl=document.getElementById('tdai-bottom');
     const composeEl=document.getElementById('tdai-compose');
@@ -128,19 +132,36 @@
 
     let imagesData=[]; let pending=false;
 
-    /* Mesure dynamique du composer => réserve l'espace en bas du chat */
-    const sizeComposer = () => {
+    /* ---------- iOS: composer en FIXED + suivi du clavier ---------- */
+    const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+    function applyIOSFix(){
+      if(!isIOS) return;
+      // place en fixed tout en bas (mieux que sticky sous iOS)
+      Object.assign(composeEl.style,{
+        position:'fixed', left:'0', right:'0', bottom:'0'
+      });
+      // ajuste avec visualViewport pour ne pas passer sous le clavier
+      const vv = window.visualViewport;
+      const onVV = () => {
+        const vh = vv.height, vo = vv.offsetTop;        // espace visible
+        const delta = (window.innerHeight - (vh + vo)); // ce qui est masqué par le clavier
+        composeEl.style.transform = `translateY(${-delta}px)`;
+        sizeComposer(); // met à jour le padding bas du chat
+      };
+      if(vv){ vv.addEventListener('resize', onVV); vv.addEventListener('scroll', onVV); onVV(); }
+    }
+
+    /* ---------- Mesure hauteur composer -> espace bas dans le chat ---------- */
+    function sizeComposer(){
       const h = composeEl.getBoundingClientRect().height || 140;
       document.documentElement.style.setProperty('--composer-h', h+'px');
-    };
+    }
     new ResizeObserver(sizeComposer).observe(composeEl);
     window.addEventListener('resize', sizeComposer);
-    if (window.visualViewport){
-      visualViewport.addEventListener('resize', sizeComposer);
-      visualViewport.addEventListener('scroll', sizeComposer);
-    }
     sizeComposer();
+    applyIOSFix();
 
+    /* ---------- Utilitaires d’affichage ---------- */
     const scrollToBottom = () => requestAnimationFrame(()=>bottomEl.scrollIntoView({block:"end"}));
     new MutationObserver(scrollToBottom).observe(chatEl,{childList:true});
 
@@ -161,7 +182,7 @@
       if(node){ node.textContent=newText; }
     }
 
-    /* Upload images (préviews) */
+    /* ---------- Upload images (préviews) ---------- */
     fileBtn.addEventListener("click",()=>fileInput.click());
     fileInput.addEventListener("change",async e=>{
       const files=Array.from(e.target.files||[]);
@@ -184,7 +205,7 @@
       });
     }
 
-    /* Envoi */
+    /* ---------- Envoi ---------- */
     formEl.addEventListener("submit",async e=>{
       e.preventDefault();
       if(pending) return;
@@ -194,8 +215,7 @@
 
       if(msg) addMsg("user",msg);
       if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
-      inputEl.value=""; autosize(inputEl); previews.innerHTML="";
-      scrollToBottom();
+      inputEl.value=""; autosize(inputEl); previews.innerHTML=""; scrollToBottom();
 
       const pid="p-"+Date.now();
       addMsg("assistant","TDAI réfléchit…",pid);
@@ -226,7 +246,7 @@
     });
 
     clearEl?.addEventListener("click",()=>{
-      chatEl.innerHTML=""; chatEl.appendChild(document.getElementById('tdai-bottom'));
+      chatEl.innerHTML=""; chatEl.appendChild(bottomEl);
       imagesData=[]; previews.innerHTML="";
       addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
       scrollToBottom();
