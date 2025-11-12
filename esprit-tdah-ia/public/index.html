@@ -6,13 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 </head>
 <body>
-<div id="app" class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;--composer-h:140px;">
+<div id="app" class="tdai-app"
+     style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;
+            --header-h:56px;--composer-h:140px;">
+
   <style>
+    /* Allow PAGE scroll (fix: remove overflow:hidden) */
     html,body{
       margin:0;padding:0;background:#0c0f19;height:100%;width:100%;
       -webkit-text-size-adjust:100%;text-size-adjust:100%;
-      overflow:hidden; /* on scrolle le chat, pas la page */
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      overflow:auto;
     }
     :root{ --safe-b:env(safe-area-inset-bottom,0px) }
 
@@ -23,10 +27,12 @@
     }
     @supports (height:100svh){ .tdai-app{ min-height:100svh; } }
 
+    /* Header sticky */
     .tdai-top{
+      position:sticky; top:0; z-index:5;
       display:flex;justify-content:space-between;align-items:center;gap:12px;
-      padding:12px 16px;border-bottom:1px solid var(--br);background:rgba(12,15,25,.9);
-      backdrop-filter:saturate(120%) blur(8px);z-index:5;
+      padding:12px 16px;border-bottom:1px solid var(--br);
+      background:rgba(12,15,25,.9);backdrop-filter:saturate(120%) blur(8px);
     }
     .tdai-brand{display:flex;align-items:center;gap:10px}
     .tdai-logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#0e1330;
@@ -36,18 +42,19 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Chat: espace de scroll. Padding-bas piloté en JS = hauteur réelle du composer */
+    /* Chat gets an explicit height => page can scroll, chat itself scrolls too */
     .tdai-chat{
-      flex:1;min-height:0;overflow:auto;
-      padding:16px 16px calc(var(--composer-h) + 16px) 16px;
+      height:calc(100svh - var(--header-h) - var(--composer-h));
+      min-height:300px;
+      overflow:auto;
+      padding:16px;
       display:flex;flex-direction:column;
-      scroll-behavior:smooth;overscroll-behavior:contain;touch-action:pan-y;
-      -webkit-overflow-scrolling:touch;
+      scroll-behavior:smooth; -webkit-overflow-scrolling:touch; touch-action:pan-y;
     }
 
     .tdai-msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
-    .tdai-msg.assistant .tdai-bub{margin-right:auto}  /* IA à gauche */
-    .tdai-msg.user .tdai-bub{margin-left:auto}       /* Toi à droite */
+    .tdai-msg.assistant .tdai-bub{margin-right:auto}   /* IA à gauche */
+    .tdai-msg.user .tdai-bub{margin-left:auto}         /* toi à droite */
     .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
     .tdai-msg.user .tdai-ava{display:none}
@@ -65,7 +72,7 @@
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Composer fixé bas ; on n’utilise plus de padding manuel — c’est géré via --composer-h */
+    /* Composer fixed (like ChatGPT) */
     .tdai-compose{
       position:fixed;left:0;right:0;bottom:0;z-index:10;
       background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
@@ -77,14 +84,13 @@
     .tdai-input{flex:1;min-height:44px;max-height:160px;resize:none;border:0;outline:none;background:transparent;color:var(--txt);padding:6px 8px;font-size:16px}
     .tdai-actions{display:flex;gap:8px;align-items:center}
     .tdai-ibtn{width:40px;height:40px;border:1px solid var(--br);border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
-    .tdai-ibtn:hover{color:var(--txt)}
     .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:12px 18px;border-radius:12px;border:1px solid #33407a;
       background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
-    .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
+    .tdai-hint{margin:6px 12px 80px;color:#a7afc7;font-size:13px;text-align:center} /* 80px de respiration sous le composer */
   </style>
 
-  <div class="tdai-top">
+  <div id="tdai-top" class="tdai-top">
     <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
     <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
   </div>
@@ -94,7 +100,6 @@
       <div class="tdai-ava">IA</div>
       <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
     </div>
-    <!-- Sentinel pour scroll -->
     <div id="tdai-bottom"></div>
   </div>
 
@@ -117,54 +122,54 @@
 <script>
   const API_URL="https://tdah-ia.onrender.com/chat";
 
-  const chatEl=document.getElementById("tdai-chat");
-  const bottomEl=document.getElementById("tdai-bottom");
-  const composeEl=document.getElementById("tdai-compose");
-  const formEl=document.getElementById("tdai-form");
-  const inputEl=document.getElementById("tdai-input");
-  const sendBtn=document.getElementById("tdai-sendBtn");
-  const clearEl=document.getElementById("tdai-clear");
-  const fileBtn=document.getElementById("tdai-photo");
-  const fileInput=document.getElementById("tdai-file");
-  const previews=document.getElementById("tdai-previews");
+  const appEl=document.getElementById('app');
+  const headerEl=document.getElementById('tdai-top');
+  const chatEl=document.getElementById('tdai-chat');
+  const bottomEl=document.getElementById('tdai-bottom');
+  const composeEl=document.getElementById('tdai-compose');
+  const formEl=document.getElementById('tdai-form');
+  const inputEl=document.getElementById('tdai-input');
+  const sendBtn=document.getElementById('tdai-sendBtn');
+  const clearEl=document.getElementById('tdai-clear');
+  const fileBtn=document.getElementById('tdai-photo');
+  const fileInput=document.getElementById('tdai-file');
+  const previews=document.getElementById('tdai-previews');
 
   let imagesData=[]; 
   let pending=false;
 
-  /* ---- Mesure live du composer => padding du chat (anti-masquage) ---- */
-  const ro = new ResizeObserver(() => {
-    const h = composeEl.getBoundingClientRect().height || 0;
-    document.getElementById('app').style.setProperty('--composer-h', h + 'px');
-    scrollToBottom();
-  });
-  ro.observe(composeEl);
-
-  function scrollToBottom(){
-    // défile jusqu’au sentinel
-    requestAnimationFrame(()=>bottomEl.scrollIntoView({block:"end"}));
-  }
-
-  // auto-scroll sur ajout de messages
-  new MutationObserver(scrollToBottom).observe(chatEl,{childList:true,subtree:false});
-
+  /* Measure real header & composer heights => chat height stays correct */
+  const sizeVars = () => {
+    const hh = headerEl.getBoundingClientRect().height || 0;
+    const ch = composeEl.getBoundingClientRect().height || 0;
+    appEl.style.setProperty('--header-h', hh+'px');
+    appEl.style.setProperty('--composer-h', ch+'px');
+  };
+  new ResizeObserver(sizeVars).observe(headerEl);
+  new ResizeObserver(sizeVars).observe(composeEl);
+  window.addEventListener('resize', sizeVars);
+  window.addEventListener('orientationchange', sizeVars);
   if(window.visualViewport){
-    visualViewport.addEventListener('resize',scrollToBottom);
-    visualViewport.addEventListener('scroll',scrollToBottom);
+    visualViewport.addEventListener('resize', sizeVars);
+    visualViewport.addEventListener('scroll', sizeVars);
   }
+  sizeVars();
+
+  const scrollToBottom = () =>
+    requestAnimationFrame(()=>bottomEl.scrollIntoView({block:"end"}));
+  new MutationObserver(scrollToBottom).observe(chatEl,{childList:true,subtree:false});
 
   function autosize(el){ el.style.height="auto"; el.style.height=Math.min(el.scrollHeight,160)+"px"; }
   autosize(inputEl);
   inputEl.addEventListener('input',()=>{ autosize(inputEl); scrollToBottom(); });
-  inputEl.addEventListener('focus',()=>setTimeout(scrollToBottom,50));
 
-  /* -------------------- UI helpers -------------------- */
+  /* Helpers */
   function addMsg(role,text,id){
     const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
     if(id) wrap.dataset.id=id;
     const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=(role==="assistant")?"IA":"";
     const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
-    if(role==="assistant"){ wrap.appendChild(ava); wrap.appendChild(bub); }
-    else { wrap.appendChild(bub); }
+    if(role==="assistant"){ wrap.appendChild(ava); wrap.appendChild(bub); } else { wrap.appendChild(bub); }
     chatEl.insertBefore(wrap,bottomEl);
     return wrap;
   }
@@ -173,7 +178,7 @@
     if(node){ node.textContent=newText; }
   }
 
-  /* ------------------- Files preview ------------------ */
+  /* Previews */
   fileBtn.addEventListener("click",()=>fileInput.click());
   fileInput.addEventListener("change",async e=>{
     const files=Array.from(e.target.files||[]);
@@ -196,20 +201,18 @@
     });
   }
 
-  /* ----------------- Submit (pending global) ----------------- */
+  /* Submit (pending global like ChatGPT) */
   formEl.addEventListener("submit",async e=>{
     e.preventDefault();
     if(pending) return;
     const msg=inputEl.value.trim();
     if(!msg && imagesData.length===0) return;
 
-    // UI immédiate
     if(msg) addMsg("user",msg);
     if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
     inputEl.value=""; autosize(inputEl); previews.innerHTML="";
     scrollToBottom();
 
-    // Placeholder assistant
     const pid="p-"+Date.now();
     addMsg("assistant","TDAI réfléchit…",pid);
 
@@ -223,7 +226,6 @@
       });
       imagesData=[];
       let data={}; try{ data=await r.json(); }catch{ data={}; }
-
       if(!r.ok){
         const detail=(data && (data.error||data.detail))?` (${data.error||data.detail})`:"";
         updateMsg(pid,"Erreur serveur."+detail);
@@ -240,8 +242,7 @@
   });
 
   clearEl?.addEventListener("click",()=>{
-    chatEl.innerHTML="";
-    chatEl.appendChild(bottomEl);
+    chatEl.innerHTML=""; chatEl.appendChild(bottomEl);
     imagesData=[]; previews.innerHTML="";
     addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
     scrollToBottom();
