@@ -5,14 +5,15 @@
   <title>TDAI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <style>
-    /* Base */
+    /* --- Base & thème sombre verrouillé --- */
     html,body{margin:0;padding:0;height:100%;background:#0c0f19;overflow:hidden;overscroll-behavior:none}
+    html{color-scheme: dark;-webkit-text-size-adjust:100%}
     :root{
       --safe-b: env(safe-area-inset-bottom,0px);
       --composer-h: 100px; /* mis à jour en JS */
     }
 
-    /* Thème & layout */
+    /* --- App --- */
     .tdai-app{
       --bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;
       --brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;
@@ -24,7 +25,7 @@
     }
     .tdai-wrap{flex:1;display:flex;flex-direction:column;min-height:0}
 
-    /* Header */
+    /* --- Header --- */
     .tdai-top{
       display:flex;justify-content:space-between;align-items:center;gap:12px;
       padding:12px 16px;border-bottom:1px solid var(--br);
@@ -39,7 +40,7 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Zone chat : seule zone qui scroll */
+    /* --- Zone chat (la seule qui scroll) --- */
     .tdai-chat{
       flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;
       padding:16px;
@@ -59,13 +60,13 @@
     .tdai-bub{
       background:var(--bubA);border:1px solid var(--br);border-radius:14px;padding:12px 14px;
       max-width:90%;word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25);
-      font-size:17px;line-height:1.7
+      font-size:17px;line-height:1.7;color:var(--txt)
     }
     .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
 
-    /* Barre d’écriture — FIXE, déplacée au-dessus du clavier via JS */
-    .tdai-compose-outer{
-      position:fixed;left:0;right:0;bottom:0;
+    /* --- Barre d’écriture : FIXE (dans l’app), gérée au-dessus du clavier --- */
+    .tdai-compose-wrap{
+      position:fixed;left:0;right:0;bottom:0; /* fixé, mais toujours DANS .tdai-app */
       padding:10px 10px calc(10px + var(--safe-b));
       background:linear-gradient(180deg,rgba(12,15,25,0),rgba(12,15,25,.85));
       z-index:10;will-change:bottom;
@@ -77,15 +78,16 @@
     }
     .tdai-input{
       flex:1;min-height:44px;max-height:160px;resize:none;border:0;outline:none;
-      background:transparent;color:var(--txt);padding:6px 8px;font-size:16px
+      background:transparent;color:#e9ebf3;padding:6px 8px;font-size:16px
     }
+    .tdai-input::placeholder{color:#c0c6e2;opacity:.75}
     .tdai-actions{display:flex;gap:8px;align-items:center}
     .tdai-ibtn{width:40px;height:40px;border:1px solid var(--br);border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
-    .tdai-ibtn:hover{color:var(--txt)}
+    .tdai-ibtn:hover{color:#fff}
     .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:12px 18px;border-radius:12px;border:1px solid #33407a;
       background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
-    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:13px;text-align:center}
+    .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
 
     @media(max-width:768px){
       .tdai-title{font-size:18px}
@@ -110,44 +112,43 @@
         <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
       </div>
     </div>
+
+    <!-- Composer FIXE, mais placé DANS .tdai-app -->
+    <div id="tdai-compose-wrap" class="tdai-compose-wrap">
+      <form id="tdai-form" class="tdai-inwrap" autocomplete="off">
+        <textarea id="tdai-input" class="tdai-input" rows="1" placeholder="Écris ton message…"></textarea>
+        <div class="tdai-actions">
+          <input type="file" id="tdai-file" accept="image/*" multiple hidden>
+          <button type="button" class="tdai-ibtn" id="tdai-photo">📷</button>
+          <button type="button" class="tdai-ibtn" id="tdai-clear">✕</button>
+          <button type="submit" class="tdai-send" id="tdai-sendBtn">➤ <span>Envoyer</span></button>
+        </div>
+      </form>
+      <div class="tdai-hint">Formats conseillés : JPG/PNG — jusqu’à 3 images par message</div>
+    </div>
   </div>
 </div>
 
-<!-- Composer fixé -->
-<div id="tdai-compose-outer" class="tdai-compose-outer">
-  <form id="tdai-form" class="tdai-inwrap" autocomplete="off">
-    <textarea id="tdai-input" class="tdai-input" rows="1" placeholder="Écris ton message…"></textarea>
-    <div class="tdai-actions">
-      <input type="file" id="tdai-file" accept="image/*" multiple hidden>
-      <button type="button" class="tdai-ibtn" id="tdai-photo">📷</button>
-      <button type="button" class="tdai-ibtn" id="tdai-clear">✕</button>
-      <button type="submit" class="tdai-send" id="tdai-sendBtn">➤ <span>Envoyer</span></button>
-    </div>
-  </form>
-  <div class="tdai-hint">Formats conseillés : JPG/PNG — jusqu’à 3 images par message</div>
-</div>
-
 <script>
-  /* Mesure de la barre + anti-sauts iOS (clavier & barre d’URL) */
-  const composeOuter = document.getElementById('tdai-compose-outer');
+  /* ===== Position clavier iOS + espace réservé ===== */
   const chatEl = document.getElementById('tdai-chat');
+  const composeWrap = document.getElementById('tdai-compose-wrap');
+  const inputEl = document.getElementById('tdai-input');
 
   function syncComposerSpace(){
-    const h = composeOuter.getBoundingClientRect().height;
+    const h = composeWrap.getBoundingClientRect().height;
     document.documentElement.style.setProperty('--composer-h', h + 'px');
   }
-  new ResizeObserver(syncComposerSpace).observe(composeOuter);
+  new ResizeObserver(syncComposerSpace).observe(composeWrap);
   syncComposerSpace();
 
-  // Déplacement dynamique au-dessus du clavier / chrome iOS
   function updateForViewport(){
     if(!window.visualViewport){ return; }
     const vv = visualViewport;
-    // espace “pris” en bas par clavier + barre Safari
     const bottomGap = Math.max(0, (window.innerHeight - (vv.height + vv.offsetTop)));
-    composeOuter.style.bottom = bottomGap + 'px';
-    // garder la vue en bas (évite le saut à chaque frappe)
-    requestAnimationFrame(()=> chatEl.scrollTo({top: chatEl.scrollHeight, behavior:'instant'}));
+    composeWrap.style.bottom = bottomGap + 'px';
+    // colle la vue en bas pour éviter le "saut"
+    chatEl.scrollTop = chatEl.scrollHeight;
   }
   if(window.visualViewport){
     visualViewport.addEventListener('resize', updateForViewport);
@@ -155,20 +156,17 @@
   }
   updateForViewport();
 
-  // Focus/blur : stabilisation supplémentaire (iOS)
-  const inputEl = document.getElementById("tdai-input");
   inputEl.addEventListener('focus', ()=>{
-    setTimeout(()=>{
-      updateForViewport();
-      chatEl.scrollTop = chatEl.scrollHeight;
-    }, 50);
+    setTimeout(()=>{ updateForViewport(); chatEl.scrollTop = chatEl.scrollHeight; }, 50);
   });
   inputEl.addEventListener('blur', ()=>{
-    composeOuter.style.bottom = '0px';
+    // Quand on tape sur "OK" (clavier fermé), on remet bottom à 0
+    composeWrap.style.bottom = '0px';
     syncComposerSpace();
+    chatEl.scrollTop = chatEl.scrollHeight;
   });
 
-  /* ======= Chat logic ======= */
+  /* ===== Logique chat (inchangée + “réfléchit…”) ===== */
   const API_URL="https://tdah-ia.onrender.com/chat";
   const formEl=document.getElementById("tdai-form");
   const clearEl=document.getElementById("tdai-clear");
@@ -195,11 +193,9 @@
     if(on) addMsg("assistant","TDAI réfléchit…");
   }
 
-  // autosize
   function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
   inputEl.addEventListener("input",()=>autosize(inputEl)); autosize(inputEl);
 
-  // Images (optionnel)
   fileBtn.addEventListener("click",()=>fileInput.click());
   fileInput.addEventListener("change",async e=>{
     const files=Array.from(e.target.files||[]);
@@ -211,7 +207,6 @@
     fileInput.value="";
   });
 
-  // Envoi
   formEl.addEventListener("submit",async e=>{
     e.preventDefault();
     if(pending) return;
@@ -232,6 +227,7 @@
       });
       imagesData=[];
       const data=await r.json().catch(()=>({}));
+      // retire le "réfléchit…" s'il est le dernier
       const last = chatEl.querySelector('.tdai-msg.assistant:last-child .tdai-bub');
       if(last && last.textContent==="TDAI réfléchit…") last.parentElement.parentElement.remove();
 
@@ -248,12 +244,10 @@
       console.error(err);
     }finally{
       setPending(false);
-      // toujours recoller en bas
       chatEl.scrollTop = chatEl.scrollHeight;
     }
   });
 
-  // Entrée rapide
   inputEl.addEventListener("keydown",e=>{
     if(e.key==="Enter"&&!e.shiftKey){
       e.preventDefault();
@@ -261,14 +255,12 @@
     }
   });
 
-  // Reset
   clearEl.addEventListener("click",()=>{
     chatEl.innerHTML="";
     imagesData=[];
     addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
   });
 
-  // Démarrage
   window.addEventListener('load', ()=> chatEl.scrollTop = chatEl.scrollHeight);
 </script>
 </body>
