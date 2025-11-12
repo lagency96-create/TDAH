@@ -1,130 +1,183 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Esprit TDAH IA</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#0b0f1a;
-    --fg:#eaf2ff;
-    --muted:#a9b8d9;
-    --grad1:#2F80ED;
-    --grad2:#3BD3FF;
-    --panel:rgba(255,255,255,0.06);
-    --border:rgba(255,255,255,0.12);
-  }
-  *{box-sizing:border-box}
-  body{
-    margin:0; font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,Arial;
-    background: radial-gradient(1200px 700px at 50% -10%, #0f1630 0%, transparent 60%), var(--bg);
-    color:var(--fg);
-    min-height:100vh; display:flex; flex-direction:column; align-items:center;
-  }
-  header{display:flex; gap:12px; align-items:center; padding:28px 16px 8px}
-  .brain{width:36px; height:36px; background:url('https://upload.wikimedia.org/wikipedia/commons/7/79/Brain_icon.svg') center/contain no-repeat; filter: drop-shadow(0 0 6px var(--grad2));}
-  h1{margin:0; font-size:clamp(22px,3.4vw,28px); font-weight:700;
-     background:linear-gradient(90deg,var(--grad2),var(--grad1)); -webkit-background-clip:text; background-clip:text; color:transparent;}
-  .sub{margin:6px 0 16px; color:var(--muted); text-align:center; padding:0 18px}
-  #chat{
-    width:min(92vw,760px); height:58vh; overflow:auto; padding:18px;
-    background:var(--panel); border:1px solid var(--border); border-radius:14px;
-    box-shadow:0 0 40px #2f80ed22;
-  }
-  .msg{margin:12px 0; line-height:1.55}
-  .user{color:var(--grad2)}
-  .ai{color:#fff}
-  #inputZone{display:flex; gap:8px; width:min(92vw,760px); margin:14px 0 28px}
-  textarea{
-    flex:1; height:56px; resize:none; padding:12px; border-radius:12px; border:1px solid var(--border);
-    background:#121a2f; color:#fff; outline:none; font:15px/1.5 Inter,system-ui;
-  }
-  button{
-    width:120px; border:0; border-radius:12px; cursor:pointer; font-weight:700; color:#fff;
-    background:linear-gradient(135deg,var(--grad1),var(--grad2)); box-shadow:0 16px 32px #2f80ed44; 
-  }
-  footer{margin:12px 0 24px; color:var(--muted); font-size:12px}
-  canvas#neurons{position:fixed; inset:0; z-index:-1; opacity:.35}
-</style>
-</head>
-<body>
-  <canvas id="neurons"></canvas>
-  <header>
-    <div class="brain"></div>
-    <h1>Esprit TDAH IA</h1>
-  </header>
-  <p class="sub">Assistant IA spécialisé: réponses courtes, actions concrètes, mini‑plans en 3 étapes. (Démo branchée sur /chat)</p>
+<div class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;">
+  <style>
+    html,body{margin:0;padding:0;background:#0c0f19;overflow:hidden;height:100%;width:100%}
+    :root{--safe-b:env(safe-area-inset-bottom,4px)} /* marge iPhone minimale */
 
-  <div id="chat"></div>
+    /* App plein écran */
+    .tdai-app{
+      color:var(--txt);
+      font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      background:linear-gradient(180deg,var(--bg0)0%,var(--bg1)60%,var(--bg2)100%);
+      width:100%;min-height:100dvh;display:flex;overflow:hidden
+    }
+    .tdai-wrap{flex:1;display:flex;flex-direction:column;width:100%}
 
-  <div id="inputZone">
-    <textarea id="message" placeholder="Écris ton message… (ex: aide-moi à finir un mail en 20 min)"></textarea>
-    <button id="send">Envoyer</button>
+    /* Header */
+    .tdai-top{display:flex;justify-content:space-between;align-items:center;gap:12px;
+      padding:12px 16px;border-bottom:1px solid var(--br);position:sticky;top:0;
+      background:rgba(12,15,25,.9);backdrop-filter:saturate(120%) blur(8px);z-index:5}
+    .tdai-brand{display:flex;align-items:center;gap:10px}
+    .tdai-logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#0e1330;
+      background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 6px 18px rgba(106,125,255,.35)}
+    .tdai-title{margin:0;font-size:17px;font-weight:700}
+    .tdai-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--br);border-radius:999px;
+      padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:12px}
+    .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
+
+    /* Zone chat */
+    .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth}
+    .tdai-chat::-webkit-scrollbar{width:10px}
+    .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
+
+    .tdai-msg{display:flex;gap:10px;margin:10px 0}
+    .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
+    .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
+    .tdai-msg.user .tdai-ava{background:linear-gradient(135deg,#50b1ff,#6a7dff)}
+    .tdai-bub{background:var(--bubA);border:1px solid var(--br);border-radius:14px;padding:12px 14px;max-width:90%;
+      word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
+
+    /* Prévisualisations images */
+    .tdai-previews{display:flex;gap:8px;flex-wrap:wrap;margin:10px 12px}
+    .tdai-thumb{position:relative;width:84px;height:84px;border:1px solid var(--br);border-radius:10px;overflow:hidden;background:#0e1530}
+    .tdai-thumb img{width:100%;height:100%;object-fit:cover}
+    .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
+
+    /* Composer : padding bas MINIMAL */
+    .tdai-compose{
+      position:sticky;bottom:0;background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
+      padding:10px 10px calc(8px + var(--safe-b))
+    }
+    .tdai-inwrap{display:flex;gap:10px;align-items:flex-end;background:rgba(20,26,52,.75);border:1px solid var(--br);
+      border-radius:16px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .tdai-input{flex:1;min-height:44px;max-height:160px;resize:none;border:0;outline:none;background:transparent;color:var(--txt);padding:6px 8px;font-size:16px}
+    .tdai-actions{display:flex;gap:8px;align-items:center}
+    .tdai-ibtn{width:40px;height:40px;border:1px solid var(--br);border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
+    .tdai-ibtn:hover{color:var(--txt)}
+    .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:11px 15px;border-radius:12px;border:1px solid #33407a;
+      background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
+      box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
+    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:12px;text-align:center}
+
+    @media(max-width:768px){
+      .tdai-app{width:100vw;min-height:100dvh;border-radius:0}
+      .tdai-title{font-size:15px}
+      .tdai-input{font-size:15px}
+    }
+  </style>
+
+  <div class="tdai-wrap">
+    <div class="tdai-top">
+      <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
+      <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
+    </div>
+
+    <div id="tdai-chat" class="tdai-chat" aria-live="polite">
+      <div class="tdai-msg assistant">
+        <div class="tdai-ava">IA</div>
+        <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
+      </div>
+    </div>
+
+    <div id="tdai-previews" class="tdai-previews"></div>
+
+    <div class="tdai-compose">
+      <form id="tdai-form" class="tdai-inwrap" autocomplete="off">
+        <textarea id="tdai-input" class="tdai-input" rows="1" placeholder="Écris ton message…"></textarea>
+        <div class="tdai-actions">
+          <input type="file" id="tdai-file" accept="image/*" multiple hidden>
+          <button type="button" class="tdai-ibtn" id="tdai-photo">📷</button>
+          <button type="button" class="tdai-ibtn" id="tdai-clear">✕</button>
+          <button type="submit" class="tdai-send" id="tdai-sendBtn">➤ <span>Envoyer</span></button>
+        </div>
+      </form>
+      <div class="tdai-hint">Formats conseillés : JPG/PNG — jusqu’à 3 images par message</div>
+    </div>
   </div>
 
-  <footer>© 2025 Esprit TDAH — Prototype</footer>
+  <script>
+    const API_URL="https://tdah-ia.onrender.com/chat";
+    const chatEl=document.getElementById("tdai-chat");
+    const formEl=document.getElementById("tdai-form");
+    const inputEl=document.getElementById("tdai-input");
+    const clearEl=document.getElementById("tdai-clear");
+    const sendBtn=document.getElementById("tdai-sendBtn");
+    const fileBtn=document.getElementById("tdai-photo");
+    const fileInput=document.getElementById("tdai-file");
+    const previews=document.getElementById("tdai-previews");
+    let imagesData=[];
 
-<script>
-  // API locale (servie par server.js)
-  const CHAT_API = "/chat";
-
-  const chat = document.getElementById("chat");
-  const input = document.getElementById("message");
-  const send = document.getElementById("send");
-
-  function addMsg(role, text){
-    const d=document.createElement("div");
-    d.className = "msg " + role;
-    d.textContent = (role==="user" ? "Toi : " : "IA : ") + text;
-    chat.appendChild(d);
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-  async function sendMessage(){
-    const text = input.value.trim();
-    if(!text) return;
-    addMsg("user", text);
-    input.value = "";
-    try{
-      const res = await fetch(CHAT_API, {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:text})
-      });
-      const data = await res.json().catch(()=>({answer:"Erreur de parsing"}));
-      addMsg("ai", data.answer || "Erreur, réessaie.");
-    }catch(e){
-      addMsg("ai", "⚠️ Impossible de joindre le serveur.");
+    function addMsg(role,text){
+      const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
+      const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=role==="user"?"Toi":"IA";
+      const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
+      wrap.appendChild(ava);wrap.appendChild(bub);
+      chatEl.appendChild(wrap);
+      chatEl.scrollTo({top:chatEl.scrollHeight,behavior:"smooth"});
     }
-  }
 
-  send.addEventListener("click", sendMessage);
-  input.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); }});
+    function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
+    inputEl.addEventListener("input",()=>autosize(inputEl));autosize(inputEl);
 
-  // fond "connexions neuronales"
-  const c=document.getElementById("neurons"), ctx=c.getContext("2d");
-  let w,h,parts=[];
-  function resize(){ w=c.width=innerWidth; h=c.height=innerHeight;
-    parts = Array.from({length:80}, ()=>({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.7,vy:(Math.random()-.5)*.7}));
-  }
-  addEventListener("resize", resize); resize();
-  function tick(){
-    ctx.clearRect(0,0,w,h);
-    for(const p of parts){
-      p.x+=p.vx; p.y+=p.vy;
-      if(p.x<0||p.x>w) p.vx*=-1; if(p.y<0||p.y>h) p.vy*=-1;
-      ctx.fillStyle="#3BD3FF"; ctx.beginPath(); ctx.arc(p.x,p.y,1.6,0,6.283); ctx.fill();
-    }
-    for(let i=0;i<parts.length;i++){
-      for(let j=i+1;j<parts.length;j++){
-        const a=parts[i], b=parts[j]; const dx=a.x-b.x, dy=a.y-b.y, d=Math.hypot(dx,dy);
-        if(d<120){ ctx.strokeStyle=`rgba(47,128,237,${1-d/120})`; ctx.lineWidth=.4; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); }
+    fileBtn.addEventListener("click",()=>fileInput.click());
+    fileInput.addEventListener("change",async e=>{
+      const files=Array.from(e.target.files||[]);
+      for(const f of files.slice(0,3-imagesData.length)){
+        if(!f.type.startsWith("image/"))continue;
+        const dataUrl=await toDataURL(f);
+        imagesData.push(dataUrl);
       }
+      renderPreviews();fileInput.value="";
+    });
+
+    function toDataURL(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file);});}
+
+    function renderPreviews(){
+      previews.innerHTML="";
+      imagesData.forEach((url,i)=>{
+        const box=document.createElement("div");box.className="tdai-thumb";
+        const img=document.createElement("img");img.src=url;
+        const x=document.createElement("button");x.className="tdai-x";x.textContent="×";
+        x.onclick=()=>{imagesData.splice(i,1);renderPreviews();};
+        box.appendChild(img);box.appendChild(x);
+        previews.appendChild(box);
+      });
     }
-    requestAnimationFrame(tick);
-  }
-  tick();
-</script>
-</body>
-</html>
+
+    formEl.addEventListener("submit",async e=>{
+      e.preventDefault();
+      const msg=inputEl.value.trim();
+      if(!msg&&imagesData.length===0)return;
+      if(msg)addMsg("user",msg);
+      if(imagesData.length){addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);}
+      inputEl.value="";autosize(inputEl);previews.innerHTML="";
+      try{
+        sendBtn.disabled=true;
+        const r=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,images:imagesData})});
+        imagesData=[];
+        const data=await r.json().catch(()=>({}));
+        if(r.ok&&(data.reply||data.choices)){
+          const reply=data.reply||(data.choices?.[0]?.message?.content)||"…";
+          addMsg("assistant",reply);
+        }else{
+          addMsg("assistant","Erreur, réessaie.");
+        }
+      }catch(err){
+        addMsg("assistant","Erreur réseau.");
+        console.error(err);
+      }finally{sendBtn.disabled=false;}
+    });
+
+    inputEl.addEventListener("keydown",e=>{
+      if(e.key==="Enter"&&!e.shiftKey){
+        e.preventDefault();
+        formEl.dispatchEvent(new Event("submit",{cancelable:true}));
+      }
+    });
+
+    clearEl.addEventListener("click",()=>{
+      chatEl.innerHTML="";imagesData=[];previews.innerHTML="";
+      addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
+    });
+  </script>
+</div>
