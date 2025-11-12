@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 </head>
 <body>
-<div class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;">
+<div id="app" class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;--composer-h:140px;">
   <style>
     html,body{
       margin:0;padding:0;background:#0c0f19;height:100%;width:100%;
@@ -36,16 +36,18 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Chat prend tout l’espace restant */
+    /* Chat: espace de scroll. Padding-bas piloté en JS = hauteur réelle du composer */
     .tdai-chat{
-      flex:1;min-height:0;overflow:auto;padding:16px 16px 16px 16px;
+      flex:1;min-height:0;overflow:auto;
+      padding:16px 16px calc(var(--composer-h) + 16px) 16px;
       display:flex;flex-direction:column;
       scroll-behavior:smooth;overscroll-behavior:contain;touch-action:pan-y;
       -webkit-overflow-scrolling:touch;
     }
+
     .tdai-msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
     .tdai-msg.assistant .tdai-bub{margin-right:auto}  /* IA à gauche */
-    .tdai-msg.user .tdai-bub{margin-left:auto}       /* toi à droite */
+    .tdai-msg.user .tdai-bub{margin-left:auto}       /* Toi à droite */
     .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
     .tdai-msg.user .tdai-ava{display:none}
@@ -63,7 +65,7 @@
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Composer FIXE en bas + ombre ; on ajoute un padding-bottom équivalent au chat via JS */
+    /* Composer fixé bas ; on n’utilise plus de padding manuel — c’est géré via --composer-h */
     .tdai-compose{
       position:fixed;left:0;right:0;bottom:0;z-index:10;
       background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
@@ -92,6 +94,8 @@
       <div class="tdai-ava">IA</div>
       <div class="tdai-bub">Bienvenue sur TDAI — la première IA conçue exclusivement pour les esprits TDAH.</div>
     </div>
+    <!-- Sentinel pour scroll -->
+    <div id="tdai-bottom"></div>
   </div>
 
   <div id="tdai-previews" class="tdai-previews"></div>
@@ -114,6 +118,7 @@
   const API_URL="https://tdah-ia.onrender.com/chat";
 
   const chatEl=document.getElementById("tdai-chat");
+  const bottomEl=document.getElementById("tdai-bottom");
   const composeEl=document.getElementById("tdai-compose");
   const formEl=document.getElementById("tdai-form");
   const inputEl=document.getElementById("tdai-input");
@@ -124,34 +129,33 @@
   const previews=document.getElementById("tdai-previews");
 
   let imagesData=[]; 
-  let pending=false; // pending global (comme ChatGPT)
+  let pending=false;
 
-  /* ------- Auto padding du chat = hauteur du composer (iPhone safe) ------- */
-  function padForComposer(extra=0){
-    const h=(composeEl?.getBoundingClientRect().height||0)+extra;
-    chatEl.style.paddingBottom=(h+16)+'px';
-  }
+  /* ---- Mesure live du composer => padding du chat (anti-masquage) ---- */
+  const ro = new ResizeObserver(() => {
+    const h = composeEl.getBoundingClientRect().height || 0;
+    document.getElementById('app').style.setProperty('--composer-h', h + 'px');
+    scrollToBottom();
+  });
+  ro.observe(composeEl);
+
   function scrollToBottom(){
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      chatEl.scrollTop=chatEl.scrollHeight;
-    }));
+    // défile jusqu’au sentinel
+    requestAnimationFrame(()=>bottomEl.scrollIntoView({block:"end"}));
   }
-  // Suivre l’apparition de nouveaux messages => auto-scroll
-  new MutationObserver(()=>scrollToBottom()).observe(chatEl,{childList:true,subtree:false});
+
+  // auto-scroll sur ajout de messages
+  new MutationObserver(scrollToBottom).observe(chatEl,{childList:true,subtree:false});
 
   if(window.visualViewport){
-    visualViewport.addEventListener('resize',()=>{ padForComposer(visualViewport.height<700?24:0); scrollToBottom(); });
-    visualViewport.addEventListener('scroll',()=> padForComposer());
+    visualViewport.addEventListener('resize',scrollToBottom);
+    visualViewport.addEventListener('scroll',scrollToBottom);
   }
-  window.addEventListener('resize',padForComposer);
-  window.addEventListener('orientationchange',padForComposer);
-  inputEl.addEventListener('focus',()=>setTimeout(()=>{ padForComposer(24); scrollToBottom(); },50));
-  inputEl.addEventListener('input',()=>{ autosize(inputEl); padForComposer(); scrollToBottom(); });
-  inputEl.addEventListener('blur', ()=>setTimeout(()=>padForComposer(),100));
-  padForComposer();
 
   function autosize(el){ el.style.height="auto"; el.style.height=Math.min(el.scrollHeight,160)+"px"; }
   autosize(inputEl);
+  inputEl.addEventListener('input',()=>{ autosize(inputEl); scrollToBottom(); });
+  inputEl.addEventListener('focus',()=>setTimeout(scrollToBottom,50));
 
   /* -------------------- UI helpers -------------------- */
   function addMsg(role,text,id){
@@ -161,7 +165,7 @@
     const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
     if(role==="assistant"){ wrap.appendChild(ava); wrap.appendChild(bub); }
     else { wrap.appendChild(bub); }
-    chatEl.appendChild(wrap);
+    chatEl.insertBefore(wrap,bottomEl);
     return wrap;
   }
   function updateMsg(id,newText){
@@ -195,25 +199,22 @@
   /* ----------------- Submit (pending global) ----------------- */
   formEl.addEventListener("submit",async e=>{
     e.preventDefault();
-    if(pending) return;                // un seul message à la fois
+    if(pending) return;
     const msg=inputEl.value.trim();
     if(!msg && imagesData.length===0) return;
 
-    // UI : affichage immédiat
+    // UI immédiate
     if(msg) addMsg("user",msg);
     if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
     inputEl.value=""; autosize(inputEl); previews.innerHTML="";
-    padForComposer(); scrollToBottom();
+    scrollToBottom();
 
     // Placeholder assistant
     const pid="p-"+Date.now();
     addMsg("assistant","TDAI réfléchit…",pid);
 
-    // lock (comme ChatGPT)
-    pending=true;
-    sendBtn.disabled=true; inputEl.disabled=true;
+    pending=true; sendBtn.disabled=true; inputEl.disabled=true;
 
-    // requête
     try{
       const r=await fetch(API_URL,{
         method:"POST",
@@ -233,15 +234,14 @@
     }catch(err){
       updateMsg(pid,"Erreur réseau. Réessaie.");
     }finally{
-      pending=false;
-      sendBtn.disabled=false; inputEl.disabled=false;
-      padForComposer(); scrollToBottom();
-      inputEl.focus({preventScroll:true});
+      pending=false; sendBtn.disabled=false; inputEl.disabled=false;
+      scrollToBottom(); inputEl.focus({preventScroll:true});
     }
   });
 
   clearEl?.addEventListener("click",()=>{
     chatEl.innerHTML="";
+    chatEl.appendChild(bottomEl);
     imagesData=[]; previews.innerHTML="";
     addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
     scrollToBottom();
