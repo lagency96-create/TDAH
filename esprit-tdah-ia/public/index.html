@@ -5,29 +5,26 @@
   <title>TDAI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <style>
-    /* ======= Base ======= */
-    html,body{margin:0;padding:0;height:100%;background:#0c0f19;overflow:hidden}
+    /* Base */
+    html,body{margin:0;padding:0;height:100%;background:#0c0f19;overflow:hidden;overscroll-behavior:none}
     :root{
       --safe-b: env(safe-area-inset-bottom,0px);
-      --composer-h: 100px; /* mesuré et mis à jour en JS */
+      --composer-h: 100px; /* mis à jour en JS */
     }
 
-    /* ======= Thème & Shell ======= */
+    /* Thème & layout */
     .tdai-app{
       --bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;
       --brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;
-
       color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
       background:linear-gradient(180deg,var(--bg0)0%,var(--bg1)60%,var(--bg2)100%);
       width:100%;
-      height:100svh;           /* gère la barre Safari iOS */
-      min-height:100svh;
-      display:flex;
+      height:100svh;min-height:100svh;display:flex;
     }
     .tdai-wrap{flex:1;display:flex;flex-direction:column;min-height:0}
 
-    /* ======= Header (fixe en haut) ======= */
+    /* Header */
     .tdai-top{
       display:flex;justify-content:space-between;align-items:center;gap:12px;
       padding:12px 16px;border-bottom:1px solid var(--br);
@@ -42,45 +39,36 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* ======= Zone de chat (la SEULE qui défile) ======= */
+    /* Zone chat : seule zone qui scroll */
     .tdai-chat{
-      flex:1; min-height:0;
-      overflow:auto; -webkit-overflow-scrolling:touch;
+      flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;
       padding:16px;
-      padding-bottom: calc(var(--composer-h) + 16px); /* place pour la barre */
+      padding-bottom:calc(var(--composer-h) + 16px);
       scroll-behavior:smooth;
+      touch-action:manipulation;
     }
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
 
     .tdai-msg{display:flex;gap:10px;margin:12px 0}
-    .tdai-ava{
-      flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;
-      font-size:12px;font-weight:700;color:#0f1424
-    }
+    .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
-    .tdai-msg.user .tdai-ava{display:none}             /* pas de badge pour l’utilisateur */
-
-    /* Alignements gauche/droite */
+    .tdai-msg.user .tdai-ava{display:none}
     .tdai-msg.assistant{justify-content:flex-start}
     .tdai-msg.user{justify-content:flex-end}
-
     .tdai-bub{
       background:var(--bubA);border:1px solid var(--br);border-radius:14px;padding:12px 14px;
       max-width:90%;word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25);
       font-size:17px;line-height:1.7
     }
-    .tdai-msg.user .tdai-bub{
-      background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72
-    }
+    .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
 
-    /* ======= Barre d’écriture (fixée en bas) ======= */
+    /* Barre d’écriture — FIXE, déplacée au-dessus du clavier via JS */
     .tdai-compose-outer{
-      position:fixed;left:0;right:0;
-      bottom:0;                       /* vrai bas d’écran */
+      position:fixed;left:0;right:0;bottom:0;
       padding:10px 10px calc(10px + var(--safe-b));
       background:linear-gradient(180deg,rgba(12,15,25,0),rgba(12,15,25,.85));
-      z-index:10;
+      z-index:10;will-change:bottom;
     }
     .tdai-inwrap{
       display:flex;gap:10px;align-items:flex-end;
@@ -111,13 +99,11 @@
 
 <div class="tdai-app">
   <div class="tdai-wrap">
-    <!-- Header -->
     <div class="tdai-top">
       <div class="tdai-brand"><div class="tdai-logo">T</div><h1 class="tdai-title">TDAI</h1></div>
       <div class="tdai-pill"><span class="tdai-dot"></span><span>TDAI-6</span></div>
     </div>
 
-    <!-- Chat -->
     <div id="tdai-chat" class="tdai-chat" aria-live="polite">
       <div class="tdai-msg assistant">
         <div class="tdai-ava">IA</div>
@@ -142,28 +128,49 @@
 </div>
 
 <script>
-  /* ======= Mesure de la barre + gestion iOS Safari ======= */
+  /* Mesure de la barre + anti-sauts iOS (clavier & barre d’URL) */
   const composeOuter = document.getElementById('tdai-compose-outer');
   const chatEl = document.getElementById('tdai-chat');
+
   function syncComposerSpace(){
     const h = composeOuter.getBoundingClientRect().height;
     document.documentElement.style.setProperty('--composer-h', h + 'px');
   }
   new ResizeObserver(syncComposerSpace).observe(composeOuter);
   syncComposerSpace();
-  // iOS clavier / barre Safari
-  if (window.visualViewport){
-    visualViewport.addEventListener('resize', ()=> {
-      syncComposerSpace();
-      // reste scotché en bas quand le clavier s’ouvre
-      requestAnimationFrame(()=> chatEl.scrollTo({top: chatEl.scrollHeight, behavior:'instant'}));
-    });
-  }
 
-  /* ======= UI chat ======= */
+  // Déplacement dynamique au-dessus du clavier / chrome iOS
+  function updateForViewport(){
+    if(!window.visualViewport){ return; }
+    const vv = visualViewport;
+    // espace “pris” en bas par clavier + barre Safari
+    const bottomGap = Math.max(0, (window.innerHeight - (vv.height + vv.offsetTop)));
+    composeOuter.style.bottom = bottomGap + 'px';
+    // garder la vue en bas (évite le saut à chaque frappe)
+    requestAnimationFrame(()=> chatEl.scrollTo({top: chatEl.scrollHeight, behavior:'instant'}));
+  }
+  if(window.visualViewport){
+    visualViewport.addEventListener('resize', updateForViewport);
+    visualViewport.addEventListener('scroll', updateForViewport);
+  }
+  updateForViewport();
+
+  // Focus/blur : stabilisation supplémentaire (iOS)
+  const inputEl = document.getElementById("tdai-input");
+  inputEl.addEventListener('focus', ()=>{
+    setTimeout(()=>{
+      updateForViewport();
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }, 50);
+  });
+  inputEl.addEventListener('blur', ()=>{
+    composeOuter.style.bottom = '0px';
+    syncComposerSpace();
+  });
+
+  /* ======= Chat logic ======= */
   const API_URL="https://tdah-ia.onrender.com/chat";
   const formEl=document.getElementById("tdai-form");
-  const inputEl=document.getElementById("tdai-input");
   const clearEl=document.getElementById("tdai-clear");
   const fileBtn=document.getElementById("tdai-photo");
   const fileInput=document.getElementById("tdai-file");
@@ -207,11 +214,10 @@
   // Envoi
   formEl.addEventListener("submit",async e=>{
     e.preventDefault();
-    if(pending) return;                               // anti double-envoi
+    if(pending) return;
     const msg=inputEl.value.trim();
     if(!msg && imagesData.length===0) return;
 
-    // Affiche côté utilisateur (droite)
     if(msg) addMsg("user",msg);
     if(imagesData.length){ addMsg("user",`[${imagesData.length} image(s)]`); }
 
@@ -226,7 +232,6 @@
       });
       imagesData=[];
       const data=await r.json().catch(()=>({}));
-      // retire le dernier "TDAI réfléchit…" si la réponse arrive
       const last = chatEl.querySelector('.tdai-msg.assistant:last-child .tdai-bub');
       if(last && last.textContent==="TDAI réfléchit…") last.parentElement.parentElement.remove();
 
@@ -237,17 +242,18 @@
         addMsg("assistant","Erreur, réessaie.");
       }
     }catch(err){
-      // enlève le pending visuel si erreur réseau
       const last = chatEl.querySelector('.tdai-msg.assistant:last-child .tdai-bub');
       if(last && last.textContent==="TDAI réfléchit…") last.parentElement.parentElement.remove();
       addMsg("assistant","Erreur réseau.");
       console.error(err);
     }finally{
       setPending(false);
+      // toujours recoller en bas
+      chatEl.scrollTop = chatEl.scrollHeight;
     }
   });
 
-  // Entrée rapide (Shift+Enter = retour à la ligne)
+  // Entrée rapide
   inputEl.addEventListener("keydown",e=>{
     if(e.key==="Enter"&&!e.shiftKey){
       e.preventDefault();
@@ -262,7 +268,7 @@
     addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
   });
 
-  // Toujours démarrer scrolé en bas
+  // Démarrage
   window.addEventListener('load', ()=> chatEl.scrollTop = chatEl.scrollHeight);
 </script>
 </body>
