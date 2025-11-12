@@ -1,6 +1,22 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>TDAI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+
 <div class="tdai-app" style="--bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;--brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;">
   <style>
-    html,body{margin:0;padding:0;background:#0c0f19;overflow:hidden;height:100%;width:100%}
+    html,body{
+      margin:0;padding:0;
+      background:#0c0f19;
+      overflow:hidden;
+      height:100%;width:100%;
+      font-size:clamp(16px,1.8vh + 0.5rem,18px); /* adapte la taille à l’écran */
+    }
+
     :root{--safe-b:env(safe-area-inset-bottom,4px)}
 
     .tdai-app{
@@ -17,9 +33,9 @@
     .tdai-brand{display:flex;align-items:center;gap:10px}
     .tdai-logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#0e1330;
       background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 6px 18px rgba(106,125,255,.35)}
-    .tdai-title{margin:0;font-size:17px;font-weight:700}
+    .tdai-title{margin:0;font-size:18px;font-weight:700}
     .tdai-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--br);border-radius:999px;
-      padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:12px}
+      padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
     .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth}
@@ -31,7 +47,7 @@
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
     .tdai-msg.user .tdai-ava{background:linear-gradient(135deg,#50b1ff,#6a7dff)}
     .tdai-bub{background:var(--bubA);border:1px solid var(--br);border-radius:14px;padding:12px 14px;max-width:90%;
-      word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+      word-wrap:break-word;white-space:pre-wrap;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:17px;line-height:1.7}
     .tdai-msg.user .tdai-bub{background:linear-gradient(180deg,var(--bubU),#0a2244);border-color:#1b3b72}
 
     .tdai-previews{display:flex;gap:8px;flex-wrap:wrap;margin:10px 12px}
@@ -49,15 +65,17 @@
     .tdai-actions{display:flex;gap:8px;align-items:center}
     .tdai-ibtn{width:40px;height:40px;border:1px solid var(--br);border-radius:12px;background:rgba(15,20,38,.6);color:#cfd5ef;display:grid;place-items:center;cursor:pointer}
     .tdai-ibtn:hover{color:var(--txt)}
-    .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:11px 15px;border-radius:12px;border:1px solid #33407a;
+    .tdai-send{display:inline-flex;gap:8px;align-items:center;padding:12px 18px;border-radius:12px;border:1px solid #33407a;
       background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
-    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:12px;text-align:center}
+    .tdai-hint{margin:6px 12px 0;color:var(--dim);font-size:13px;text-align:center}
 
     @media(max-width:768px){
-      .tdai-app{width:100vw;min-height:100dvh;border-radius:0}
-      .tdai-title{font-size:15px}
-      .tdai-input{font-size:15px}
+      .tdai-title{font-size:18px}
+      .tdai-bub{font-size:17px;line-height:1.7}
+      .tdai-input{font-size:16px}
+      .tdai-send{padding:12px 18px}
+      .tdai-chat{padding:18px}
     }
   </style>
 
@@ -176,3 +194,6 @@
     });
   </script>
 </div>
+
+</body>
+</html>
