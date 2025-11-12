@@ -38,7 +38,7 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    /* Le chat occupe tout l'espace restant. PAS de height fixe. */
+    /* Le chat occupe tout l'espace restant (pas de height fixe) */
     .tdai-chat{
       flex:1; min-height:0;
       overflow:auto; padding:16px;
@@ -73,7 +73,7 @@
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Composer FIXE en bas, le chat reçoit du padding égal à sa hauteur */
+    /* Composer FIXE en bas ; on donne un padding-bottom équivalent au chat */
     .tdai-compose{
       position:fixed; left:0; right:0; bottom:0; z-index:10;
       background:rgba(12,15,25,.96); backdrop-filter:blur(8px);
@@ -132,12 +132,14 @@
   const previews=document.getElementById("tdai-previews");
   const composeEl=document.querySelector('.tdai-compose');
 
-  let imagesData=[]; let pending=false;
+  let imagesData=[]; 
+  let pending=false;       // empêche le double envoi
+  let watchdog=null;       // déblocage si la requête traîne
 
-  /* === Réserve l'espace du composer en bas du chat (clé iPhone) === */
+  /* --- Padding du chat = hauteur réelle du composer (clave iPhone) --- */
   function padForComposer(extra=0){
     const h = (composeEl?.getBoundingClientRect().height || 0) + extra;
-    chatEl.style.paddingBottom = (h + 16) + 'px';  // espace suffisant pour voir le dernier msg
+    chatEl.style.paddingBottom = (h + 16) + 'px';
   }
   function scrollToBottom(){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -153,16 +155,22 @@
   inputEl.addEventListener('focus', () => setTimeout(() => { padForComposer(24); scrollToBottom(); }, 50));
   inputEl.addEventListener('input', () => { padForComposer(); scrollToBottom(); });
   inputEl.addEventListener('blur',  () => setTimeout(()=>padForComposer(), 100));
-  padForComposer(); // premier calcul
+  padForComposer();
 
-  /* === UI messages === */
-  function addMsg(role,text){
+  /* --- UI messages --- */
+  function addMsg(role,text,id){
     const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
+    if(id) wrap.dataset.id=id;
     const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=(role==="assistant")?"IA":"";
     const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
     wrap.appendChild(ava);wrap.appendChild(bub);
     chatEl.appendChild(wrap);
     scrollToBottom(); padForComposer();
+    return wrap;
+  }
+  function updateMsg(id,newText){
+    const node = chatEl.querySelector(`.tdai-msg[data-id="${id}"] .tdai-bub`);
+    if(node){ node.textContent=newText; scrollToBottom(); }
   }
 
   function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
@@ -178,7 +186,6 @@
     }
     renderPreviews(); fileInput.value="";
   });
-
   function renderPreviews(){
     previews.innerHTML="";
     imagesData.forEach((url,i)=>{
@@ -191,38 +198,59 @@
     });
   }
 
-  /* === Envoi === */
+  /* --- Envoi robuste (timeout + placeholder + reset garanti) --- */
   formEl.addEventListener("submit",async e=>{
     e.preventDefault();
     const msg=inputEl.value.trim();
-    if(pending) return;
+    if(pending) return;                    // évite double clic coincant
     if(!msg && imagesData.length===0) return;
 
+    // Affiche tout de suite côté UI
     if(msg) addMsg("user",msg);
     if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
     inputEl.value=""; autosize(inputEl); previews.innerHTML="";
+    padForComposer(); scrollToBottom();
+
+    // Placeholder assistant qui sera remplacé
+    const pid = "pending-"+Date.now();
+    addMsg("assistant","TDAI réfléchit…", pid);
+
+    // Armement anti-freeze
     pending=true; sendBtn.disabled=true;
+    const FREEZE_MS = 15000;
+    watchdog = setTimeout(()=>{
+      pending=false; sendBtn.disabled=false;
+      updateMsg(pid,"(Temps de réponse dépassé) Réessaie.");
+    }, FREEZE_MS);
+
+    // Requête avec AbortController (timeout)
+    const controller = new AbortController();
+    const to = setTimeout(()=>controller.abort(), FREEZE_MS);
 
     try{
       const r=await fetch(API_URL,{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:msg,images:imagesData})
+        body:JSON.stringify({message:msg,images:imagesData}),
+        signal: controller.signal
       });
+      clearTimeout(to);
       imagesData=[];
-      const data=await r.json().catch(()=>({}));
+      let data={};
+      try{ data=await r.json(); }catch{ data={}; }
 
       if(!r.ok){
         const detail=(data && (data.error||data.detail))?` (${data.error||data.detail})`:"";
-        addMsg("assistant","Erreur serveur."+detail);
+        updateMsg(pid,"Erreur serveur."+detail);
       }else{
         const reply=data.answer || data.reply || data.choices?.[0]?.message?.content || "…";
-        addMsg("assistant",reply);
+        updateMsg(pid, reply);
       }
     }catch(err){
-      console.error(err);
-      addMsg("assistant","Erreur réseau.");
+      clearTimeout(to);
+      updateMsg(pid, (err?.name==="AbortError") ? "Réseau lent. Réessaie." : "Erreur réseau.");
     }finally{
+      clearTimeout(watchdog); watchdog=null;
       pending=false; sendBtn.disabled=false;
       padForComposer(); scrollToBottom();
     }
