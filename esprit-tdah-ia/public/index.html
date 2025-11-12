@@ -13,7 +13,7 @@
       margin:0;padding:0;background:#0c0f19;height:100%;width:100%;
       font-size:clamp(16px,1.8vh + 0.5rem,18px);
       -webkit-text-size-adjust:100%; text-size-adjust:100%;
-      overflow:hidden; /* on laisse scroller le chat, pas la page */
+      overflow:hidden; /* on fait scroller le chat, pas la page */
     }
 
     :root{--safe-b:env(safe-area-inset-bottom,4px)}
@@ -50,17 +50,18 @@
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
 
-    /* Lignes de message */
+    /* Messages */
     .tdai-msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
-    /* IA à gauche (par défaut) */
+    /* IA à gauche */
     .tdai-msg.assistant{flex-direction:row;justify-content:flex-start}
-    /* Toi à droite */
+    /* Utilisateur à droite */
     .tdai-msg.user{flex-direction:row-reverse;justify-content:flex-end}
 
     .tdai-ava{flex:0 0 34px;height:34px;border-radius:8px;
       display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f1424}
     .tdai-msg.assistant .tdai-ava{background:linear-gradient(135deg,var(--brand),var(--acc))}
-    .tdai-msg.user .tdai-ava{background:linear-gradient(135deg,#50b1ff,#6a7dff)}
+    /* On masque l’avatar côté utilisateur (pas de “Toi”) */
+    .tdai-msg.user .tdai-ava{display:none}
 
     .tdai-bub{
       background:var(--bubA);border:1px solid var(--br);border-radius:14px;
@@ -77,7 +78,7 @@
     .tdai-thumb img{width:100%;height:100%;object-fit:cover}
     .tdai-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;cursor:pointer}
 
-    /* Barre de saisie FIXÉE en bas (plus de disparition) */
+    /* Barre de saisie FIXE en bas */
     .tdai-compose{
       position:fixed;left:0;right:0;bottom:0;z-index:10;
       background:rgba(12,15,25,.96);backdrop-filter:blur(8px);
@@ -93,14 +94,6 @@
       background:linear-gradient(135deg,var(--brand),var(--acc));color:#0e1330;font-weight:600;cursor:pointer;
       box-shadow:0 8px 22px rgba(91,231,196,.18),0 8px 22px rgba(106,125,255,.18)}
     .tdai-hint{margin:6px 12px 0;color:#a7afc7;font-size:13px;text-align:center}
-
-    @media(max-width:768px){
-      .tdai-title{font-size:18px}
-      .tdai-bub{font-size:17px;line-height:1.7}
-      .tdai-input{font-size:16px}
-      .tdai-send{padding:12px 18px}
-      .tdai-chat{padding:18px}
-    }
   </style>
 
   <div class="tdai-wrap">
@@ -142,10 +135,10 @@
     const fileBtn=document.getElementById("tdai-photo");
     const fileInput=document.getElementById("tdai-file");
     const previews=document.getElementById("tdai-previews");
-    let imagesData=[];
-
-    /* Fix iPhone : on réserve l’espace de la barre fixée et on reste en bas */
     const composeEl = document.querySelector('.tdai-compose');
+    let imagesData=[]; let pending=false;
+
+    /* ——— Barre fixe iPhone : on réserve l’espace et on reste scotché en bas ——— */
     function padForComposer(){
       const h = composeEl?.getBoundingClientRect().height || 0;
       chatEl.style.paddingBottom = (h + 12) + 'px';
@@ -166,12 +159,11 @@
 
     function addMsg(role,text){
       const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
-      const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=role==="user"?"Toi":"IA";
+      const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=role==="assistant"?"IA":""; /* pas de “Toi” */
       const bub=document.createElement("div");bub.className="tdai-bub";bub.textContent=text;
       wrap.appendChild(ava);wrap.appendChild(bub);
       chatEl.appendChild(wrap);
-      chatEl.scrollTo({top:chatEl.scrollHeight,behavior:"smooth"});
-      padForComposer(); scrollToBottom();
+      scrollToBottom(); padForComposer();
     }
 
     function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
@@ -182,13 +174,11 @@
       const files=Array.from(e.target.files||[]);
       for(const f of files.slice(0,3-imagesData.length)){
         if(!f.type.startsWith("image/"))continue;
-        const dataUrl=await toDataURL(f);
+        const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
         imagesData.push(dataUrl);
       }
       renderPreviews();fileInput.value="";
     });
-
-    function toDataURL(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file);});}
 
     function renderPreviews(){
       previews.innerHTML="";
@@ -205,25 +195,41 @@
     formEl.addEventListener("submit",async e=>{
       e.preventDefault();
       const msg=inputEl.value.trim();
-      if(!msg&&imagesData.length===0)return;
-      if(msg)addMsg("user",msg);
-      if(imagesData.length){addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);}
-      inputEl.value="";autosize(inputEl);previews.innerHTML="";
+      if(pending) return;                  // anti double-envoi
+      if(!msg && imagesData.length===0) return;
+
+      if(msg) addMsg("user",msg);
+      if(imagesData.length) addMsg("user",`[${imagesData.length} image(s) envoyée(s)]`);
+      inputEl.value=""; autosize(inputEl); previews.innerHTML="";
+      pending=true; sendBtn.disabled=true;
+
       try{
-        sendBtn.disabled=true;
-        const r=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,images:imagesData})});
+        const r=await fetch(API_URL,{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({message:msg,images:imagesData})
+        });
         imagesData=[];
         const data=await r.json().catch(()=>({}));
-        if(r.ok&&(data.reply||data.choices)){
-          const reply=data.reply||(data.choices?.[0]?.message?.content)||"…";
-          addMsg("assistant",reply);
+
+        if(!r.ok){
+          const detail = (data && (data.error||data.detail)) ? ` (${data.error||data.detail})` : "";
+          addMsg("assistant","Erreur serveur."+detail);
         }else{
-          addMsg("assistant","Erreur, réessaie.");
+          /* ✅ gère answer | reply | choices */
+          const reply = data.answer
+            || data.reply
+            || data.choices?.[0]?.message?.content
+            || "…";
+          addMsg("assistant", reply);
         }
       }catch(err){
-        addMsg("assistant","Erreur réseau.");
         console.error(err);
-      }finally{sendBtn.disabled=false;}
+        addMsg("assistant","Erreur réseau.");
+      }finally{
+        pending=false; sendBtn.disabled=false;
+        padForComposer();
+      }
     });
 
     inputEl.addEventListener("keydown",e=>{
@@ -233,7 +239,7 @@
       }
     });
 
-    clearEl.addEventListener("click",()=>{
+    clearEl?.addEventListener("click",()=>{
       chatEl.innerHTML="";imagesData=[];previews.innerHTML="";
       addMsg("assistant","Nouvelle conversation. Texte ou photos : je t’écoute.");
     });
