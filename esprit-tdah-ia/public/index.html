@@ -14,7 +14,9 @@
       background:#0c0f19;
       overflow:hidden;
       height:100%;width:100%;
-      font-size:clamp(16px,1.8vh + 0.5rem,18px); /* adapte la taille à l’écran */
+      font-size:clamp(16px,1.8vh + 0.5rem,18px);
+      -webkit-text-size-adjust:100%;
+      text-size-adjust:100%;
     }
 
     :root{--safe-b:env(safe-area-inset-bottom,4px)}
@@ -23,8 +25,16 @@
       color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
       background:linear-gradient(180deg,var(--bg0)0%,var(--bg1)60%,var(--bg2)100%);
-      width:100%;min-height:100dvh;display:flex;overflow:hidden
+      width:100%;
+      min-height:100dvh;
+      display:flex;
+      overflow:hidden;
     }
+    /* iPhone: garde la bonne hauteur quand le clavier s’ouvre */
+    @supports (height: 100svh){
+      .tdai-app{ min-height:100svh; }
+    }
+
     .tdai-wrap{flex:1;display:flex;flex-direction:column;width:100%}
 
     .tdai-top{display:flex;justify-content:space-between;align-items:center;gap:12px;
@@ -38,7 +48,8 @@
       padding:6px 10px;background:rgba(20,26,52,.6);color:var(--txt);font-size:13px}
     .tdai-dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--acc));box-shadow:0 0 10px var(--acc)}
 
-    .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth}
+    .tdai-chat{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;scroll-behavior:smooth;
+      overscroll-behavior:contain;}
     .tdai-chat::-webkit-scrollbar{width:10px}
     .tdai-chat::-webkit-scrollbar-thumb{background:#27315e;border-radius:999px}
 
@@ -120,6 +131,26 @@
     const previews=document.getElementById("tdai-previews");
     let imagesData=[];
 
+    /* Tweak iPhone: calcul du padding bas + ancrage auto au dernier message */
+    const composeEl = document.querySelector('.tdai-compose');
+    function padForComposer(){
+      const h = composeEl?.getBoundingClientRect().height || 0;
+      chatEl.style.paddingBottom = (h + 12) + 'px';
+    }
+    function scrollToBottom(){
+      chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' });
+    }
+    if (window.visualViewport){
+      visualViewport.addEventListener('resize', () => { padForComposer(); scrollToBottom(); });
+      visualViewport.addEventListener('scroll', padForComposer);
+    }
+    window.addEventListener('resize', padForComposer);
+    window.addEventListener('orientationchange', padForComposer);
+    inputEl.addEventListener('focus', () => setTimeout(() => { padForComposer(); scrollToBottom(); }, 50));
+    inputEl.addEventListener('input', () => { padForComposer(); scrollToBottom(); });
+    inputEl.addEventListener('blur', () => setTimeout(padForComposer, 100));
+    padForComposer();
+
     function addMsg(role,text){
       const wrap=document.createElement("div");wrap.className="tdai-msg "+role;
       const ava=document.createElement("div");ava.className="tdai-ava";ava.textContent=role==="user"?"Toi":"IA";
@@ -127,6 +158,7 @@
       wrap.appendChild(ava);wrap.appendChild(bub);
       chatEl.appendChild(wrap);
       chatEl.scrollTo({top:chatEl.scrollHeight,behavior:"smooth"});
+      padForComposer(); scrollToBottom();
     }
 
     function autosize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}
