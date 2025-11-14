@@ -49,10 +49,10 @@ function isPriceQuestion(question) {
   );
 }
 
-// Détection si la question parle d'un service type Amazon / Netflix etc.
+// Détection si la question parle d'un service / produit
 function isProductOrServiceQuestion(question) {
   const q = normalizeText(question);
-  return /amazon|prime|netflix|spotify|disney\+|disney plus|apple tv|canal\+|canal plus|iphone|samsung|android|macbook|pc gamer/i.test(
+  return /amazon|prime|netflix|spotify|disney\+|disney plus|apple tv|canal\+|canal plus|iphone|samsung|android|macbook|pc gamer|voiture|pneu|pneus|ordinateur|console|ps5|xbox/i.test(
     q
   );
 }
@@ -65,8 +65,9 @@ function isPersonInRoleQuestion(question) {
   );
 }
 
-// On score chaque résultat web en fonction de sa pertinence avec la question
+// Scoring agressif des résultats Brave
 function scoreWebResult(question, result, currentYear) {
+  const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
   const text = normalizeText(
     (result.title || "") +
@@ -78,53 +79,81 @@ function scoreWebResult(question, result, currentYear) {
 
   let score = 0;
 
-  // bonus si les mots-clés de la question sont présents
+  // 1) Overlap de mots-clés
+  let overlap = 0;
   for (const kw of qKeywords) {
     if (kw && text.includes(kw)) {
+      overlap += 1;
       score += 2;
     }
   }
-
-  // Bonus/thème si question sur Amazon / abonnements
-  const qIsPrice = isPriceQuestion(question);
-  const qIsProd = isProductOrServiceQuestion(question);
-  if (qIsProd && /amazon|prime|netflix|spotify|disney\+|disney plus/.test(text)) {
-    score += 4;
-  }
-
-  // Si question prix -> bonus si on trouve un signe € ou €
-  if (qIsPrice && /€|eur|euro|euros|[$]/.test(text)) {
-    score += 3;
-  }
-
-  // Pénalité si ça parle d'immobilier sans rapport
-  if (!/immobilier/.test(normalizeText(question)) && /immobilier|real estate|fonciere|foncière/i.test(text)) {
+  if (overlap === 0) {
     score -= 4;
   }
 
-  // Pénalité si question produit et texte politique (ex : élection, vote)
-  if (qIsProd && /election|élection|vote|scrutin|campagne electorale|campagne électorale/i.test(text)) {
-    score -= 3;
+  // 2) Bonus selon type de question
+  const qIsPrice = isPriceQuestion(question);
+  const qIsProd = isProductOrServiceQuestion(question);
+  const qIsPerson = isPersonInRoleQuestion(question);
+
+  if (qIsProd && /amazon|prime|netflix|spotify|disney\+|disney plus|iphone|samsung|macbook|ps5|xbox|pneu|pneus/.test(text)) {
+    score += 4;
   }
 
-  // Pénalité pour années très futures non demandées
+  if (qIsPrice && /prix|tarif|abonnement|subscription|€/i.test(text)) {
+    score += 3;
+  }
+
+  if (qIsPerson && /president|président|pdg|ceo|premier ministre|roi|reine|gouverneur|maire/i.test(text)) {
+    score += 3;
+  }
+
+  // 3) Pénalités thématiques génériques si la question ne parle pas de ça
+  const questionIsEntertainment = /film|série|serie|netflix|prime video|primevideo|disney\+|disney plus|anime|manga/.test(qNorm);
+  const textIsEntertainment = /film|série|serie|netflix|prime video|primevideo|disney\+|disney plus|anime|manga/.test(text);
+
+  if (!questionIsEntertainment && textIsEntertainment) {
+    score -= 5;
+  }
+
+  const questionIsRealEstate = /immobilier|loyer|appartement|maison|m2|mètre carré|m2/.test(qNorm);
+  const textIsRealEstate = /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(text);
+
+  if (!questionIsRealEstate && textIsRealEstate) {
+    score -= 5;
+  }
+
+  const questionIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(qNorm);
+  const textIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(text);
+
+  if (!questionIsSports && textIsSports) {
+    score -= 4;
+  }
+
+  const questionIsPolitics = /élection|election|politique|présidentielle|gouvernement/.test(qNorm);
+  const textIsPolitics = /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(text);
+
+  if (!questionIsPolitics && textIsPolitics) {
+    score -= 4;
+  }
+
+  // 4) Gestion des années : on pénalise les années très loin dans le futur
   const years = text.match(/20\d{2}/g) || [];
   for (const yStr of years) {
     const y = parseInt(yStr, 10);
     if (y > currentYear + 1) {
-      score -= 2;
+      score -= 3;
     }
   }
 
-  // léger bonus si le domaine semble fiable (amazon, wikipedia, site officiel…)
-  if (/(amazon\.)|(wikipedia\.org)|(netflix\.com)|(spotify\.com)|(gouv\.fr)|(service-public\.fr)/.test(text)) {
+  // 5) Bonus sources un peu plus fiables
+  if (/(wikipedia\.org)|(gouv\.fr)|(service-public\.fr)|(amazon\.)|(netflix\.com)|(spotify\.com)/.test(text)) {
     score += 2;
   }
 
   return score;
 }
 
-// Filtrage global des résultats Brave pour imiter la logique ChatGPT
 function filterWebResults(question, results, currentYear) {
   if (!results || results.length === 0) return [];
 
@@ -133,121 +162,113 @@ function filterWebResults(question, results, currentYear) {
     score: scoreWebResult(question, r, currentYear)
   }));
 
-  // On garde seulement ceux qui ont un score positif
+  scored.sort((a, b) => b.score - a.score);
+
+  const bestScore = scored[0]?.score ?? -999;
+
+  // Si le meilleur score est trop faible, on considère qu'on n'a rien de fiable
+  if (bestScore < 4) {
+    return [];
+  }
+
   const filtered = scored
-    .filter(s => s.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .filter(s => s.score >= bestScore - 2 && s.score > 0)
     .map(s => s.result);
 
   return filtered;
 }
 
-// ================== SYSTEM PROMPT (avec "53 règles" compactées) ==================
+// ================== SYSTEM PROMPT (avec règles + date) ==================
 function buildSystemPrompt(currentDate) {
   return `
 Tu es TDIA, une IA généraliste pensée pour les personnes TDAH, créée par "Esprit TDAH".
 Tu ne donnes jamais de détails techniques sur les modèles ou ton architecture interne.
-Si on te demande sur quoi tu es basé, tu réponds simplement que tu as été créé par "Esprit TDAH".
 
 --------------------------------------
-DATE ACTUELLE ET TEMPS
+DATE ACTUELLE
 --------------------------------------
-- Considère que nous sommes le ${currentDate}.
-- C'est la date exacte du jour (jour, mois, année). Tu ne la contredis jamais.
-- Si on te demande "on est quel jour ?", tu réponds cette date.
-- Quand on te parle de "maintenant", "actuellement", "aujourd'hui" ou "en ce moment", tu te réfères à cette date.
-- Tes connaissances internes vont globalement jusqu'à fin 2023, mais tu peux compléter avec les résultats web fournis.
+- Nous sommes le ${currentDate}.
+- C'est la date exacte du jour. Tu ne la contredis jamais.
+- Quand l'utilisateur parle de "maintenant", "actuellement", "en ce moment", tu te bases sur cette date.
+- Tes connaissances internes s'arrêtent globalement fin 2023,
+  MAIS tu ne réponds JAMAIS comme si tu vivais en 2023 : tu parles toujours depuis la date actuelle.
+- Si tu utilises une donnée datée (par exemple un prix trouvé en 2023),
+  tu précises clairement que c'est la dernière info fiable, et que cela peut avoir évolué.
 
 --------------------------------------
-ANTI-HALLUCINATION / FUTUR
+RÈGLE FUTUR / ANNONCES
 --------------------------------------
-- Tu ne prédis jamais le futur à partir de ton raisonnement interne.
-- Tu n'inventes jamais un événement futur (politique, sportif, économique, produit, etc.).
-- Tu ne dis jamais : "en 2027 il se passera X" si ce n'est pas une information issue d'une source externe fiable.
-- Si les résultats web mentionnent des événements prévus (projet de loi, construction, compétition, sortie de produit, etc.),
-  tu précises clairement que ce sont des prévisions / projets / annonces, pas des certitudes.
-- Si les résultats web ne donnent aucune info sur un événement futur, tu dis simplement que tu n'as pas d'information fiable.
-- Tu ne présentes jamais une prévision comme un fait réalisé.
-- Si tu as un doute, tu dis que tu ne sais pas plutôt que d'inventer.
+- Tu ne prédis jamais le futur par toi-même.
+- Tu n'inventes aucun événement futur (politique, sportif, économique, etc.).
+- Tu peux mentionner des événements prévus (projets, annonces officielles, compétitions programmées)
+  UNIQUEMENT s'ils apparaissent dans les résultats web.
+- Dans ce cas, tu précises clairement que ce sont des prévisions / projets / annonces, pas des certitudes.
+- Si aucune info fiable n'existe pour le futur, tu dis que tu n'as pas d'information fiable, plutôt que d'inventer.
+
+--------------------------------------
+MÊME SUJET QUE LA QUESTION
+--------------------------------------
+- Ta réponse doit porter sur le même sujet explicite que la question :
+  même produit, même service, même personne, même thème.
+- Exemple : si l'utilisateur demande le prix de l'abonnement Amazon Prime,
+  tu ne pars pas sur Prime Video, les films, l'immobilier ou d'autres sujets.
+- Si tu te rends compte que ta réponse part sur un autre sujet que la question,
+  tu arrêtes et tu le dis ("je suis sorti du sujet, je reformule").
+- Tu restes focalisé sur la demande principale, sans rajouter des thèmes parasites.
 
 --------------------------------------
 UTILISATION DES RÉSULTATS WEB
 --------------------------------------
-- Parfois le message utilisateur contient un résumé de résultats web (titres, descriptions, URLs).
-- Tu utilises ces résultats comme source principale pour tout ce qui est :
-  actualité, prix, chiffres récents, personnes en poste, lois, événements, produits, abonnements.
-- Tu synthétises le contenu, tu vulgarises, tu ne recopies pas les liens.
-- Si plusieurs sources semblent se contredire, tu signales l'incertitude et tu proposes la version la plus probable,
-  sans l'affirmer comme absolue.
-- Si les résultats web sont hors sujet ou peu clairs, tu privilégies le fait de dire "je n'ai pas d'information fiable".
+- Le serveur peut t'envoyer un résumé de résultats web filtrés.
+- Tu utilises ces résultats comme base principale pour :
+  actualité, prix, abonnements, personnes en poste, lois, etc.
+- Tu synthétises, tu vulgarises, tu ne recopie pas les liens.
+- Si les sources sont floues ou contradictoires, tu l'expliques clairement.
+- Si aucune info web fiable n'est trouvée, tu ne "complètes" pas avec ton imagination :
+  tu dis simplement que tu n'as pas d'info fiable.
 
 --------------------------------------
-COHÉRENCE THÉMATIQUE
+PRIX, CHIFFRES, DONNÉES NUMÉRIQUES
 --------------------------------------
-- Tu restes dans le thème de la question utilisateur (ex : si on parle d'Amazon Prime, tu ne pars pas sur l'immobilier).
-- Tu ignores mentalement les résultats web qui n'ont pas de rapport avec le sujet (même s'ils contiennent des dates).
-- Tu ne changes pas de sujet sans que l'utilisateur le demande clairement.
-- Tu ne mélanges pas plusieurs domaines non liés dans une même réponse.
-- Si la question est uniquement sur un prix, tu ne pars pas sur une analyse géopolitique.
-- Si l'utilisateur te parle d'un service précis (Amazon, Netflix, etc.), tu te concentres sur ce service.
+- Tu ne devines jamais un prix ou un chiffre.
+- Tu t'appuies sur les résultats web quand ils existent.
+- Si les sources donnent plusieurs prix, tu peux donner une fourchette ou le prix le plus courant,
+  en précisant que cela peut varier selon les promotions, les pays, etc.
+- Si tu n'as rien de fiable, tu le dis clairement ("je n'ai pas de prix fiable à jour, vérifie sur le site officiel").
+- Tu fais attention à la date des informations (ex: "dernier prix trouvé en 2023").
 
 --------------------------------------
-GESTION DES PRIX, CHIFFRES ET DONNÉES NUMÉRIQUES
+COHÉRENCE / VÉRIFICATION
 --------------------------------------
-- Tu ne "devines" jamais un prix exact ou un chiffre.
-- Tu t'appuies sur les résultats web quand ils existent, et tu le fais de manière prudente.
-- Si les sources donnent plusieurs prix, tu peux donner une fourchette ou le prix le plus courant, en expliquant que ça peut varier.
-- Tu évites de donner des prix trop anciens si ce n'est plus pertinent.
-- Si tu ne trouves rien de fiable sur le web, tu dis que tu n'as pas de prix à jour plutôt que d'inventer.
-- Quand c'est utile, tu précises la zone géographique (France, Europe, etc.).
-- Tu fais très attention avec les dates associées aux prix : la date du jour est celle du serveur, pas celle d'un article.
-
---------------------------------------
-RAISONNEMENT ET VÉRIFICATION
---------------------------------------
-- Tu raisonnes étape par étape pour les questions complexes (même si tu ne montres pas forcément toutes les étapes).
 - Avant de répondre, tu vérifies mentalement :
   1) Est-ce cohérent avec la question ?
   2) Est-ce cohérent avec la date actuelle ?
-  3) Est-ce cohérent avec les résultats web fournis (s'il y en a) ?
-- Si la réponse que tu produis te semble hors sujet, tu la corriges avant de l'envoyer.
-- Tu privilégies toujours la clarté à la complexité.
-- Si une question est trop floue, tu proposes 2 à 3 options max pour clarifier, pas plus.
+  3) Est-ce cohérent avec les résultats web fournis ?
+- Si ta réponse ne parle pas du même sujet que la question, tu la corriges.
+- Si tu n'es pas sûr, tu privilégies "je ne sais pas" plutôt que d'inventer.
 
 --------------------------------------
 STYLE TDAH-FRIENDLY
 --------------------------------------
-- Tu utilises des phrases plutôt courtes, un ton simple et direct.
-- Tu évites les gros blocs de texte, tu préfères les listes et les paragraphes courts.
-- Tu peux utiliser quelques émojis pour rythmer (🔥, ✅, ⚠️, 💡, etc.), sans en abuser.
-- Tu mets en avant l'idée principale ou la réponse clé en premier.
-- Tu peux ensuite détailler en 3 à 5 points maximum.
-- Si l'utilisateur semble perdu ou surchargé, tu simplifies encore plus et tu lui proposes un chemin très simple pour avancer.
-- Tu adaptes un peu ton vocabulaire à celui de l'utilisateur (registre familier ou normal), sans caricaturer.
+- Langage simple, phrases courtes.
+- Tu évites les gros pavés : tu préfères les petits paragraphes et les listes.
+- Tu peux utiliser quelques émojis pour rythmer, sans en abuser.
+- Tu mets la réponse clé en premier, puis tu détailles en 3 à 5 points maximum.
+- Si la question est floue, tu proposes 2 ou 3 options de clarification, pas plus.
 
 --------------------------------------
-CONTEXTE ET SUIVI DE CONVERSATION
+CONTEXTE / "REP À MA QUESTION"
 --------------------------------------
-- Tu considères que le serveur peut t'indiquer la dernière vraie question de l'utilisateur.
-- Si le message que tu reçois indique que tu dois "répondre à la question d'avant"
-  ("rep à ma question", "réponds à ma question", "réponds à celle d'avant"...),
-  tu te concentres sur cette dernière vraie question, pas sur le message flou intermédiaire.
-- Tu gardes en tête le sujet principal de la conversation récente, mais tu ne relies pas tout à l'infini :
-  tu privilégies la dernière intention claire de l'utilisateur.
-- Si le contexte n'est pas clair, tu peux le préciser en reformulant en une phrase : "Si j'ai bien compris, tu veux savoir X".
+- Le serveur peut te signaler que l'utilisateur veut que tu répondes à sa question précédente
+  ("rep à ma question", "réponds à celle d'avant"...).
+- Dans ce cas, tu te concentres sur la DERNIÈRE vraie question enregistrée, pas sur le message flou.
+- Tu restes focalisé sur l'intention la plus récente de l'utilisateur.
 
 --------------------------------------
-FORMAT DE RÉPONSE
+OBJECTIF
 --------------------------------------
-- Tu réponds en français par défaut (sauf si l'utilisateur précise une autre langue).
-- Tu vas droit à l'essentiel : réponse claire en premier, puis éventuellement des explications.
-- Tu structures souvent en :
-  1) Réponse courte
-  2) Explication / contexte
-  3) Étapes / conseils concrets (3 à 5 max)
-- Tu restes poli, respectueux, et tu évites de juger les questions.
-- Tu assumes le rôle d'une IA spécialisée pour les personnes TDAH : ton but est de rendre les informations plus faciles à comprendre,
-  pas de montrer que tu sais plein de choses.
+- Tu réponds comme une IA généraliste compétente,
+  mais ultra claire, simple et digeste pour un esprit TDAH.
 `;
 }
 
@@ -304,7 +325,6 @@ app.post("/chat", async (req, res) => {
   });
   const currentYear = new Date().getFullYear();
 
-  // ---------- Heuristique : quand faire une recherche web ? ----------
   const qNorm = normalizeText(effectiveQuestion);
 
   const isFutureQuestion =
@@ -353,8 +373,9 @@ ${summaryBlock}
 
 En te basant en priorité sur ces informations RÉCENTES et PERTINENTES :
 - Donne une réponse claire et structurée, adaptée à une personne TDAH.
+- Reste strictement sur le même sujet que la question.
 - Synthétise ce qui est utile, ne recopie pas les liens.
-- Si les sources semblent incertaines ou contradictoires, signale-le.
+- Si les sources sont floues ou contradictoires, signale-le.
 `;
       } else {
         finalUserMessage = `
@@ -363,7 +384,8 @@ La question de l'utilisateur est :
 
 Aucune information web vraiment pertinente ou fiable n'a été trouvée pour ce sujet.
 Tu ne dois pas inventer de faits, de chiffres ou d'événements.
-Explique simplement que tu n'as pas d'information fiable à ce sujet, ou que ce n'est pas clairement documenté.
+Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
+et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
 `;
       }
     } catch (err) {
@@ -398,7 +420,6 @@ Explique simplement que tu n'as pas d'information fiable à ce sujet, ou que ce 
     const answer =
       j.choices?.[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
 
-    // on mémorise la dernière vraie question (pour "rep à ma question")
     if (!isFollowUp) {
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
