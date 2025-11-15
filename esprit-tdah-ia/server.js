@@ -72,6 +72,68 @@ function isDiagnosticMessage(message) {
   return m === "diagnostic" || m === "diagnostic tdia";
 }
 
+// ================== HELPERS DETECTION QUESTIONS ACTU / SUJETS VOLATILS ==================
+
+function isRecentLawOrPoliticsQuestion(question) {
+  const q = normalizeText(question);
+
+  const hasLawWord = /loi|lois|legislation|législation|decret|décret|amendement|ordonnance|code penal|code civil|reforme|réforme/.test(
+    q
+  );
+  const hasRecencyWord = /dernier|derniere|derniers|dernieres|recent|recente|recents|recentes|nouvelle|nouvelles|vient d etre votee|vient d etre adoptee|vient d etre promulguee|votee hier|vote hier|adoptee hier|promulguee hier|cette semaine|ce mois ci|ce mois-ci/.test(
+    q
+  );
+  const hasFranceOrGov = /france|assemblee nationale|assemblée nationale|senat|sénat|gouvernement|elysee|elysée|macron|ministre|president|président|parlement/.test(
+    q
+  );
+
+  return hasLawWord && (hasRecencyWord || hasFranceOrGov);
+}
+
+function isGenericCurrentAffairQuestion(question) {
+  const q = normalizeText(question);
+
+  // Politique / événements
+  if (/election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(q)) {
+    return true;
+  }
+
+  // Résultats, scores, matchs récents
+  if (/resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(q)) {
+    return true;
+  }
+
+  // Météo
+  if (/meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(q)) {
+    return true;
+  }
+
+  // Statistiques économiques / chiffres récents
+  if (/taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(q)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isVolatileTopic(question) {
+  const q = normalizeText(question);
+
+  if (isPriceQuestion(question)) return true;
+  if (isProductOrServiceQuestion(question)) return true;
+  if (isPersonInRoleQuestion(question)) return true;
+  if (isRecentLawOrPoliticsQuestion(question)) return true;
+  if (isGenericCurrentAffairQuestion(question)) return true;
+
+  // Mention explicite de dates récentes ou contexte temps réel
+  if (/202[3-9]|203\d/.test(q)) return true;
+  if (/aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(q)) {
+    return true;
+  }
+
+  return false;
+}
+
 // ================== SERPAPI SEARCH (WEB) ==================
 
 async function serpSearch(query) {
@@ -182,15 +244,18 @@ function scoreWebResult(question, result, currentYear) {
   );
   if (!questionIsPolitics && textIsPolitics) score -= 4;
 
-  // Années trop futures
+  // Années trop futures / bonus récent
   const years = text.match(/20\d{2}/g) || [];
   for (const yStr of years) {
     const y = parseInt(yStr, 10);
     if (y > currentYear + 1) score -= 3;
+    if (y === currentYear || y === currentYear - 1) score += 1;
   }
 
   // Légers bonus sources fiables
-  if (/wikipedia\.org|gouv\.fr|service-public\.fr|amazon\./.test(text)) score += 2;
+  if (/wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(text)) {
+    score += 2;
+  }
 
   return score;
 }
@@ -207,7 +272,6 @@ function filterWebResults(question, results, currentYear) {
 
   const bestScore = scored[0]?.score ?? -999;
 
-  // Si le meilleur score est trop faible, on considère qu'on n'a rien de fiable
   if (bestScore < 4) {
     log("Filtrage: meilleur score trop faible, aucun résultat retenu");
     return [];
@@ -226,7 +290,7 @@ function filterWebResults(question, results, currentYear) {
 
 // ================== SYSTEM PROMPT ==================
 
-function buildSystemPrompt(currentDate) {
+function buildSystemPrompt(currentDate, isVolatile) {
   return `
 Tu es TDIA, une IA généraliste pensée pour les personnes TDAH, créée par "Esprit TDAH".
 Tu ne donnes jamais de détails techniques sur ton modèle ou ton architecture.
@@ -244,6 +308,13 @@ FUTUR
 - Tu n'inventes aucun événement futur.
 - Tu peux mentionner des événements prévus uniquement s'ils apparaissent dans les résultats web.
 - Dans ce cas, tu précises toujours que ce sont des annonces ou des prévisions, pas des certitudes.
+
+SUJETS VOLATILS
+- Le serveur peut te signaler si le sujet semble dépendre de données qui évoluent vite
+  (prix, lois récentes, élections, météo, résultats de match, chiffres économiques).
+- Indication reçue pour cette question: sujet volatil = ${isVolatile ? "oui" : "non"}.
+- Si le sujet est volatil et que tu n'as pas de résultats web fiables, tu expliques clairement
+  les limites de tes connaissances et tu invites l'utilisateur à vérifier sur une source officielle.
 
 MÊME SUJET QUE LA QUESTION
 - Ta réponse doit porter sur le même sujet explicite que la question :
@@ -304,7 +375,7 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
-  // Mode diagnostic interne pour toi
+  // Mode diagnostic interne
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
     diag.push("Diagnostic TDIA :");
@@ -312,7 +383,6 @@ app.post("/chat", async (req, res) => {
     diag.push(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "présente" : "absente"}`);
     diag.push(`- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`);
 
-    // Test rapide SerpAPI (sans cramer trop de crédit)
     try {
       if (process.env.SERP_API_KEY) {
         const testResults = await serpSearch("test google actualité");
@@ -347,32 +417,38 @@ app.post("/chat", async (req, res) => {
 
   let finalUserMessage = effectiveQuestion;
 
-  const currentDate = new Date().toLocaleDateString("fr-FR", {
+  const now = new Date();
+  const currentDate = now.toLocaleDateString("fr-FR", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric"
   });
-  const currentYear = new Date().getFullYear();
+  const currentYear = now.getFullYear();
   const qNorm = normalizeText(effectiveQuestion);
 
-  // Décider si on appelle le web
   const isFutureQuestion =
     /en 20(2[6-9]|3\d)|dans \d+ ans|année prochaine|l'année prochaine|dans le futur/.test(
       qNorm
     );
 
-  const forceSearch =
+  const volatile = isVolatileTopic(effectiveQuestion);
+
+  const regexSuggestsWeb =
     isPriceQuestion(effectiveQuestion) ||
     isProductOrServiceQuestion(effectiveQuestion) ||
     isPersonInRoleQuestion(effectiveQuestion) ||
-    /actu|actualité|news|résultat|score|aujourd'hui|hier|2024|2025|mise à jour|update/.test(
+    isRecentLawOrPoliticsQuestion(effectiveQuestion) ||
+    isGenericCurrentAffairQuestion(effectiveQuestion) ||
+    /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
     );
 
+  const forceSearch = !isFutureQuestion && regexSuggestsWeb;
+
   let usedSearch = false;
 
-  if (!isFutureQuestion && forceSearch) {
+  if (forceSearch) {
     try {
       log("Web search triggered for question:", effectiveQuestion);
       const query = `${effectiveQuestion} ${currentYear}`;
@@ -405,7 +481,7 @@ La question de l'utilisateur est :
 "${effectiveQuestion}"
 
 Aucune information web vraiment pertinente ou fiable n'a été trouvée.
-Tu ne dois pas inventer de faits, de chiffres ou d'événements.
+Tu ne dois pas inventer de faits, de chiffres ou d'événements récents.
 Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
 et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
 `;
@@ -416,8 +492,19 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    const openAiModel = process.env.MODEL || "gpt-4o";
-    log("Calling OpenAI with model:", openAiModel);
+    const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
+    const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
+
+    log(
+      "Calling OpenAI with model:",
+      openAiModel,
+      "| usedSearch:",
+      usedSearch,
+      "| volatile:",
+      volatile,
+      "| modeLabel:",
+      modeLabel
+    );
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -429,7 +516,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
         model: openAiModel,
         temperature: 0.35,
         messages: [
-          { role: "system", content: buildSystemPrompt(currentDate) },
+          { role: "system", content: buildSystemPrompt(currentDate, volatile) },
           { role: "user", content: finalUserMessage }
         ],
         max_tokens: 700
@@ -450,7 +537,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
 
-    return res.json({ reply: answer, usedSearch });
+    // Frontend : tu peux utiliser modeLabel + usedSearch
+    return res.json({ reply: answer, usedSearch, volatile, modeLabel });
   } catch (e) {
     log("Erreur serveur:", e);
     return res.status(500).json({ error: "server_error", detail: String(e) });
@@ -464,3 +552,65 @@ app.get("*", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => log("TDIA server on http://localhost:" + port));
+
+/*
+=========================================================
+SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
+=========================================================
+
+Dans ton CSS (par exemple public/style.css) :
+
+.recherche-bar-premium {
+  position: relative;
+  width: 110px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.recherche-bar-premium::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -40px;
+  width: 40px;
+  height: 100%;
+  background: linear-gradient(to right, #5be7c4, #6a7dff);
+  opacity: 0.9;
+  filter: blur(0.3px);
+  animation: tdiabar-slide 1.4s linear infinite;
+}
+
+@keyframes tdiabar-slide {
+  from { left: -40px; }
+  to   { left: 120px; }
+}
+
+Dans ton HTML (zone statut IA) :
+
+<div id="tdia-status">
+  <span id="tdia-mode-label">TDIA réfléchis</span>
+  <div id="tdia-bar-container" style="margin-top:6px; display:none;">
+    <div class="recherche-bar-premium"></div>
+  </div>
+</div>
+
+Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
+
+// response = { reply, usedSearch, volatile, modeLabel }
+
+document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
+
+const barContainer = document.getElementById("tdia-bar-container");
+if (response.modeLabel === "recherche approfondie") {
+  barContainer.style.display = "block";
+} else {
+  barContainer.style.display = "none";
+}
+
+Comme ça :
+- par défaut tu peux afficher "TDIA réfléchis"
+- si le backend renvoie modeLabel = "recherche approfondie" (usedSearch = true),
+  la petite barre premium apparaît, en animation infinie, tant que la réponse est en cours ou affichée.
+*/
