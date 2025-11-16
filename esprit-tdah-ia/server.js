@@ -99,26 +99,69 @@ function isGenericCurrentAffairQuestion(question) {
   const q = normalizeText(question);
 
   // Politique / événements
-  if (/election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(q)) {
+  if (
+    /election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Résultats, scores, matchs récents
-  if (/resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(q)) {
+  if (
+    /resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Météo
-  if (/meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(q)) {
+  if (
+    /meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Statistiques économiques / chiffres récents
-  if (/taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(q)) {
+  if (
+    /taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   return false;
+}
+
+// Stats / résultats sportifs (Messi, Ronaldo, UFC, etc.)
+function isSportsResultOrStatQuestion(question) {
+  const q = normalizeText(question);
+
+  const hasSportsWord =
+    /foot|football|ligue 1|champions league|c1|premier league|nba|ufc|mma|tennis|roland garros|wimbledon|match|combat|fight|carte|fight card/.test(
+      q
+    );
+
+  const hasResultWord =
+    /resultat|résultat|score|qui a gagne|qui a gagné|k\.o|ko|tko|decision|décision/.test(
+      q
+    );
+
+  const hasStatWord =
+    /but|buts|goal|goals|passe dec|passes dec|passe décisive|stat|stats|statistiques|record|titre|trophees|trophées/.test(
+      q
+    );
+
+  const hasBigName =
+    /messi|ronaldo|mbappe|mbappé|neymar|haaland|benzema|zidane|gane|aspinall|mcgregor|adesanya|usman|ngannou/.test(
+      q
+    );
+
+  return (hasSportsWord && (hasResultWord || hasStatWord)) || (hasBigName && hasStatWord);
 }
 
 function isVolatileTopic(question) {
@@ -129,10 +172,15 @@ function isVolatileTopic(question) {
   if (isPersonInRoleQuestion(question)) return true;
   if (isRecentLawOrPoliticsQuestion(question)) return true;
   if (isGenericCurrentAffairQuestion(question)) return true;
+  if (isSportsResultOrStatQuestion(question)) return true;
 
   // Mention explicite de dates récentes ou contexte temps réel
   if (/202[3-9]|203\d/.test(q)) return true;
-  if (/aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(q)) {
+  if (
+    /aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(
+      q
+    )
+  ) {
     return true;
   }
 
@@ -154,6 +202,101 @@ function isTechOrGlobalInfoQuestion(question) {
   }
 
   return false;
+}
+
+// ================== CLASSIFIEUR IA (GPT-4o) ==================
+
+async function decideSearchWithClassifier(question, flags) {
+  const openAiModel = process.env.MODEL || "gpt-4o";
+
+  const systemPrompt = `
+Tu es un PETIT CLASSIFIEUR qui aide le serveur TDIA.
+Ta mission :
+- Lire la question de l'utilisateur (il vit en France métropolitaine).
+- Décider si le serveur doit lancer une recherche web (SerpAPI) ou NON.
+- Choisir aussi la région de recherche : "fr" (Google France) ou "us" (Google US).
+
+RÈGLES GLOBALES :
+- Par défaut, on préfère Google France ("fr"), surtout pour :
+  - prix, abonnements, services du quotidien, salaires, aides, impôts, transports
+  - lois, élections, politique, personnes au pouvoir
+  - résultats sportifs, scores, événements récents en général
+- Google US ("us") est surtout utile pour :
+  - sujets tech/IA/dev/SaaS/marketing/YouTube/SEO/global, quand le pays n'est pas important
+- L'utilisateur veut des infos à jour. Si la question parle de résultats sportifs récents,
+  de "hier", "aujourd'hui", de "combien de buts au total", etc. -> souvent il faut le web.
+
+TON OUTPUT :
+- Tu dois répondre STRICTEMENT avec un JSON sur une seule ligne, sans texte autour.
+- Format EXACT :
+  {"use_web": true/false, "region": "fr" ou "us"}
+
+Tu n'ajoutes PAS d'autre champ, pas de commentaire, pas de texte en plus.
+`;
+
+  const userPrompt = `
+Question utilisateur : "${question}"
+
+Contexte flags (pour t'aider à raisonner, mais tu n'es pas obligé de les suivre) :
+- isPriceQuestion: ${flags.isPriceQ}
+- isProductOrServiceQuestion: ${flags.isProdQ}
+- isLawQuestion: ${flags.isLawQ}
+- isSportsQuestion: ${flags.isSportsQ}
+- isTechGlobal: ${flags.techGlobal}
+- isVolatileTopic: ${flags.volatile}
+
+Décide :
+1) Faut-il lancer une recherche web (SerpAPI) ? (use_web true/false)
+2) Si use_web = true, région "fr" ou "us".
+Souviens-toi : tu dois retourner UNIQUEMENT un JSON valide.
+`;
+
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: openAiModel,
+        temperature: 0,
+        max_tokens: 60,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
+
+    if (!r.ok) {
+      const t = await r.text();
+      log("OpenAI classifier error:", r.status, t);
+      return null;
+    }
+
+    const j = await r.json();
+    const raw = j.choices?.[0]?.message?.content?.trim() || "";
+    log("Classifier raw output:", raw);
+
+    // On essaie de parser le JSON
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.use_web === "boolean" && (parsed.region === "fr" || parsed.region === "us")) {
+        return {
+          useWeb: parsed.use_web,
+          region: parsed.region
+        };
+      }
+    } catch (e) {
+      log("Classifier JSON parse error:", e);
+    }
+
+    return null;
+  } catch (e) {
+    log("Classifier call failed:", e);
+    return null;
+  }
 }
 
 // ================== SERPAPI SEARCH (WEB) ==================
@@ -210,11 +353,7 @@ function scoreWebResult(question, result, currentYear) {
   const qKeywords = extractKeywords(question);
 
   const text = normalizeText(
-    (result.title || "") +
-      " " +
-      (result.description || "") +
-      " " +
-      (result.url || "")
+    (result.title || "") + " " + (result.description || "") + " " + (result.url || "")
   );
 
   let score = 0;
@@ -244,36 +383,28 @@ function scoreWebResult(question, result, currentYear) {
   }
 
   // Pénalités thématiques hors sujet
-  const questionIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
-    qNorm
-  );
-  const textIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
-    text
-  );
+  const questionIsEntertainment =
+    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(qNorm);
+  const textIsEntertainment =
+    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(text);
   if (!questionIsEntertainment && textIsEntertainment) score -= 5;
 
-  const questionIsRealEstate = /immobilier|loyer|appartement|maison|m2|mètre carré/.test(
-    qNorm
-  );
-  const textIsRealEstate = /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(
-    text
-  );
+  const questionIsRealEstate =
+    /immobilier|loyer|appartement|maison|m2|mètre carré/.test(qNorm);
+  const textIsRealEstate =
+    /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(text);
   if (!questionIsRealEstate && textIsRealEstate) score -= 5;
 
-  const questionIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(
-    qNorm
-  );
-  const textIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(
-    text
-  );
+  const questionIsSports =
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(qNorm);
+  const textIsSports =
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(text);
   if (!questionIsSports && textIsSports) score -= 4;
 
-  const questionIsPolitics = /élection|election|politique|présidentielle|gouvernement/.test(
-    qNorm
-  );
-  const textIsPolitics = /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(
-    text
-  );
+  const questionIsPolitics =
+    /élection|election|politique|présidentielle|gouvernement/.test(qNorm);
+  const textIsPolitics =
+    /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(text);
   if (!questionIsPolitics && textIsPolitics) score -= 4;
 
   // Années trop futures / bonus récent
@@ -285,7 +416,11 @@ function scoreWebResult(question, result, currentYear) {
   }
 
   // Légers bonus sources fiables
-  if (/wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(text)) {
+  if (
+    /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
+      text
+    )
+  ) {
     score += 2;
   }
 
@@ -492,30 +627,70 @@ app.post("/chat", async (req, res) => {
   const volatile = isVolatileTopic(effectiveQuestion);
   const techGlobal = isTechOrGlobalInfoQuestion(effectiveQuestion);
 
-  // Déterminer la région de recherche (FR par défaut, US pour certaines questions "global/tech")
-  let searchRegion = "fr";
-
-  // Pour les prix / lois / rôles de personnes, on reste toujours FR
+  // Flags basés sur regex
   const isPriceQ = isPriceQuestion(effectiveQuestion);
   const isProdQ = isProductOrServiceQuestion(effectiveQuestion);
   const isLawQ = isRecentLawOrPoliticsQuestion(effectiveQuestion);
+  const isSportsQ = isSportsResultOrStatQuestion(effectiveQuestion);
 
-  if (!isPriceQ && !isLawQ && techGlobal) {
-    // Questions tech / globales non liées aux prix France -> on peut utiliser Google US
-    searchRegion = "us";
+  // Région par défaut
+  let searchRegion = "fr";
+
+  // ======== CLASSIFIEUR IA POUR DÉCIDER SI ON CHERCHE SUR LE WEB ========
+  let classifierUseWeb = null;
+  let classifierRegion = null;
+
+  if (!isFutureQuestion) {
+    const cls = await decideSearchWithClassifier(effectiveQuestion, {
+      isPriceQ,
+      isProdQ,
+      isLawQ,
+      isSportsQ,
+      techGlobal,
+      volatile
+    });
+
+    if (cls && typeof cls.useWeb === "boolean") {
+      classifierUseWeb = cls.useWeb;
+    }
+    if (cls && (cls.region === "fr" || cls.region === "us")) {
+      classifierRegion = cls.region;
+    }
   }
 
+  // ======== BACKUP REGEX (au cas où le classifieur foire) ========
   const regexSuggestsWeb =
     isPriceQ ||
     isProdQ ||
     isPersonInRoleQuestion(effectiveQuestion) ||
     isLawQ ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
+    isSportsQ ||
     /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
     );
 
-  const forceSearch = !isFutureQuestion && regexSuggestsWeb;
+  // Décision finale : est-ce qu'on lance SerpAPI ?
+  let forceSearch = false;
+  if (classifierUseWeb === true) {
+    forceSearch = true;
+  } else if (classifierUseWeb === false) {
+    // Le classifieur dit NON explicitement
+    forceSearch = false;
+  } else {
+    // Pas de réponse claire du classifieur -> fallback regex
+    forceSearch = !isFutureQuestion && regexSuggestsWeb;
+  }
+
+  // Région finale : on écoute le classifieur, MAIS on force FR pour prix/lois/rôles
+  if (classifierRegion) {
+    searchRegion = classifierRegion;
+  }
+
+  if (isPriceQ || isLawQ || isPersonInRoleQuestion(effectiveQuestion)) {
+    // Sécurité : pour ces sujets, toujours FR
+    searchRegion = "fr";
+  }
 
   let usedSearch = false;
 
@@ -525,7 +700,9 @@ app.post("/chat", async (req, res) => {
         "Web search triggered for question:",
         effectiveQuestion,
         "| region:",
-        searchRegion
+        searchRegion,
+        "| classifierUseWeb:",
+        classifierUseWeb
       );
 
       let query = `${effectiveQuestion} ${currentYear}`;
@@ -576,7 +753,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
+    const openAiModel = process.env.MODEL || "gpt-4o"; // TOUT passe par ce modèle
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
     // Construire les messages avec historique court
@@ -710,4 +887,3 @@ SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
 // } else {
 //   barContainer.style.display = "none";
 // }
-*/
