@@ -48,7 +48,7 @@ function extractKeywords(question) {
     "quelles", "qui", "que", "quand", "ou", "où"
   ];
   const tokens = q.split(/[^a-z0-9]+/).filter(Boolean);
-  return tokens.filter(t => t.length > 2 && !stopwords.includes(t));
+  return tokens.filter((t) => t.length > 2 && !stopwords.includes(t));
 }
 
 function isPriceQuestion(question) {
@@ -82,15 +82,18 @@ function isDiagnosticMessage(message) {
 function isRecentLawOrPoliticsQuestion(question) {
   const q = normalizeText(question);
 
-  const hasLawWord = /loi|lois|legislation|législation|decret|décret|amendement|ordonnance|code penal|code civil|reforme|réforme/.test(
-    q
-  );
-  const hasRecencyWord = /dernier|derniere|derniers|dernieres|recent|recente|recents|recentes|nouvelle|nouvelles|vient d etre votee|vient d etre adoptee|vient d etre promulguee|votee hier|vote hier|adoptee hier|promulguee hier|cette semaine|ce mois ci|ce mois-ci/.test(
-    q
-  );
-  const hasFranceOrGov = /france|assemblee nationale|assemblée nationale|senat|sénat|gouvernement|elysee|elysée|macron|ministre|president|président|parlement/.test(
-    q
-  );
+  const hasLawWord =
+    /loi|lois|legislation|législation|decret|décret|amendement|ordonnance|code penal|code civil|reforme|réforme/.test(
+      q
+    );
+  const hasRecencyWord =
+    /dernier|derniere|derniers|dernieres|recent|recente|recents|recentes|nouvelle|nouvelles|vient d etre votee|vient d etre adoptee|vient d etre promulguee|votee hier|vote hier|adoptee hier|promulguee hier|cette semaine|ce mois ci|ce mois-ci/.test(
+      q
+    );
+  const hasFranceOrGov =
+    /france|assemblee nationale|assemblée nationale|senat|sénat|gouvernement|elysee|elysée|macron|ministre|president|président|parlement/.test(
+      q
+    );
 
   return hasLawWord && (hasRecencyWord || hasFranceOrGov);
 }
@@ -161,7 +164,10 @@ function isSportsResultOrStatQuestion(question) {
       q
     );
 
-  return (hasSportsWord && (hasResultWord || hasStatWord)) || (hasBigName && hasStatWord);
+  return (
+    (hasSportsWord && (hasResultWord || hasStatWord)) ||
+    (hasBigName && hasStatWord)
+  );
 }
 
 function isVolatileTopic(question) {
@@ -204,101 +210,6 @@ function isTechOrGlobalInfoQuestion(question) {
   return false;
 }
 
-// ================== CLASSIFIEUR IA (GPT-4o) ==================
-
-async function decideSearchWithClassifier(question, flags) {
-  const openAiModel = process.env.MODEL || "gpt-4o";
-
-  const systemPrompt = `
-Tu es un PETIT CLASSIFIEUR qui aide le serveur TDIA.
-Ta mission :
-- Lire la question de l'utilisateur (il vit en France métropolitaine).
-- Décider si le serveur doit lancer une recherche web (SerpAPI) ou NON.
-- Choisir aussi la région de recherche : "fr" (Google France) ou "us" (Google US).
-
-RÈGLES GLOBALES :
-- Par défaut, on préfère Google France ("fr"), surtout pour :
-  - prix, abonnements, services du quotidien, salaires, aides, impôts, transports
-  - lois, élections, politique, personnes au pouvoir
-  - résultats sportifs, scores, événements récents en général
-- Google US ("us") est surtout utile pour :
-  - sujets tech/IA/dev/SaaS/marketing/YouTube/SEO/global, quand le pays n'est pas important
-- L'utilisateur veut des infos à jour. Si la question parle de résultats sportifs récents,
-  de "hier", "aujourd'hui", de "combien de buts au total", etc. -> souvent il faut le web.
-
-TON OUTPUT :
-- Tu dois répondre STRICTEMENT avec un JSON sur une seule ligne, sans texte autour.
-- Format EXACT :
-  {"use_web": true/false, "region": "fr" ou "us"}
-
-Tu n'ajoutes PAS d'autre champ, pas de commentaire, pas de texte en plus.
-`;
-
-  const userPrompt = `
-Question utilisateur : "${question}"
-
-Contexte flags (pour t'aider à raisonner, mais tu n'es pas obligé de les suivre) :
-- isPriceQuestion: ${flags.isPriceQ}
-- isProductOrServiceQuestion: ${flags.isProdQ}
-- isLawQuestion: ${flags.isLawQ}
-- isSportsQuestion: ${flags.isSportsQ}
-- isTechGlobal: ${flags.techGlobal}
-- isVolatileTopic: ${flags.volatile}
-
-Décide :
-1) Faut-il lancer une recherche web (SerpAPI) ? (use_web true/false)
-2) Si use_web = true, région "fr" ou "us".
-Souviens-toi : tu dois retourner UNIQUEMENT un JSON valide.
-`;
-
-  try {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: openAiModel,
-        temperature: 0,
-        max_tokens: 60,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ]
-      })
-    });
-
-    if (!r.ok) {
-      const t = await r.text();
-      log("OpenAI classifier error:", r.status, t);
-      return null;
-    }
-
-    const j = await r.json();
-    const raw = j.choices?.[0]?.message?.content?.trim() || "";
-    log("Classifier raw output:", raw);
-
-    // On essaie de parser le JSON
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.use_web === "boolean" && (parsed.region === "fr" || parsed.region === "us")) {
-        return {
-          useWeb: parsed.use_web,
-          region: parsed.region
-        };
-      }
-    } catch (e) {
-      log("Classifier JSON parse error:", e);
-    }
-
-    return null;
-  } catch (e) {
-    log("Classifier call failed:", e);
-    return null;
-  }
-}
-
 // ================== SERPAPI SEARCH (WEB) ==================
 
 async function serpSearch(query, region = "fr") {
@@ -336,7 +247,7 @@ async function serpSearch(query, region = "fr") {
 
   const organic = data.organic_results || [];
 
-  const mapped = organic.map(res => ({
+  const mapped = organic.map((res) => ({
     title: res.title || "",
     url: res.link || "",
     description: res.snippet || ""
@@ -435,7 +346,7 @@ function scoreWebResult(question, result, currentYear) {
 function filterWebResults(question, results, currentYear) {
   if (!results || results.length === 0) return [];
 
-  const scored = results.map(r => ({
+  const scored = results.map((r) => ({
     result: r,
     score: scoreWebResult(question, r, currentYear)
   }));
@@ -450,14 +361,85 @@ function filterWebResults(question, results, currentYear) {
   }
 
   const filtered = scored
-    .filter(s => s.score >= bestScore - 2 && s.score > 0)
-    .map(s => s.result);
+    .filter((s) => s.score >= bestScore - 2 && s.score > 0)
+    .map((s) => s.result);
 
   log(
     `Filtrage: ${results.length} résultats initiaux, ${filtered.length} conservés (bestScore=${bestScore})`
   );
 
   return filtered;
+}
+
+// ================== CLASSIFIEUR IA (gpt-4o) ==================
+
+async function classifyNeedWeb(question, isVolatile) {
+  const openAiModel = process.env.MODEL || "gpt-4o";
+
+  const systemPrompt = `
+Tu es un petit classifieur.
+Ton SEUL rôle est de décider si la question de l'utilisateur nécessite une recherche web à jour (SerpAPI) ou non.
+
+Règle:
+- Réponds UNIQUEMENT par "web" ou "no_web".
+- "web" si la question demande des infos d'actualité, des chiffres récents, des résultats de match/combat, des lois récentes, des prix/abonnements, des personnes actuellement en poste, la météo, etc.
+- "no_web" si la question est théorique, historique ancienne, conseil, réflexion, développement personnel, explication générale, etc.
+
+Tu ne fais AUCUNE autre phrase. Juste "web" ou "no_web".
+`;
+
+  const body = {
+    model: openAiModel,
+    temperature: 0,
+    max_tokens: 5,
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `Question: "${question}"
+Sujet potentiellement volatil (prix/actu/sport/lois/etc.) indiqué par le serveur: ${
+          isVolatile ? "oui" : "non"
+        }
+
+Dois-tu appeler le web ?`
+      }
+    ]
+  };
+
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const t = await r.text();
+      log("OpenAI classify error:", r.status, t);
+      return false;
+    }
+
+    const j = await r.json();
+    const content =
+      j.choices?.[0]?.message?.content?.trim().toLowerCase() || "";
+
+    if (content.includes("web")) {
+      return true;
+    }
+    if (content.includes("no_web")) {
+      return false;
+    }
+
+    // Réponse chelou -> fallback prudente : si isVolatile, on part sur web.
+    return !!isVolatile;
+  } catch (e) {
+    log("Erreur classifieur IA:", e);
+    // En cas de problème classifieur, on ne bloque pas tout.
+    return !!isVolatile;
+  }
 }
 
 // ================== SYSTEM PROMPT ==================
@@ -571,8 +553,12 @@ app.post("/chat", async (req, res) => {
     const diag = [];
     diag.push("Diagnostic TDIA :");
     diag.push(`- OpenAI MODEL: ${process.env.MODEL || "non défini"}`);
-    diag.push(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "présente" : "absente"}`);
-    diag.push(`- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`);
+    diag.push(`- OPENAI_API_KEY: ${
+      process.env.OPENAI_API_KEY ? "présente" : "absente"
+    }`);
+    diag.push(`- SERP_API_KEY: ${
+      process.env.SERP_API_KEY ? "présente" : "absente"
+    }`);
     diag.push(`- Messages d'historique pour cette IP: ${history.length}`);
 
     try {
@@ -627,82 +613,55 @@ app.post("/chat", async (req, res) => {
   const volatile = isVolatileTopic(effectiveQuestion);
   const techGlobal = isTechOrGlobalInfoQuestion(effectiveQuestion);
 
-  // Flags basés sur regex
+  // Déterminer la région de recherche (FR par défaut, US pour certaines questions "global/tech")
+  let searchRegion = "fr";
+
+  // Pour les prix / lois / rôles de personnes, on reste toujours FR
   const isPriceQ = isPriceQuestion(effectiveQuestion);
   const isProdQ = isProductOrServiceQuestion(effectiveQuestion);
   const isLawQ = isRecentLawOrPoliticsQuestion(effectiveQuestion);
-  const isSportsQ = isSportsResultOrStatQuestion(effectiveQuestion);
 
-  // Région par défaut
-  let searchRegion = "fr";
-
-  // ======== CLASSIFIEUR IA POUR DÉCIDER SI ON CHERCHE SUR LE WEB ========
-  let classifierUseWeb = null;
-  let classifierRegion = null;
-
-  if (!isFutureQuestion) {
-    const cls = await decideSearchWithClassifier(effectiveQuestion, {
-      isPriceQ,
-      isProdQ,
-      isLawQ,
-      isSportsQ,
-      techGlobal,
-      volatile
-    });
-
-    if (cls && typeof cls.useWeb === "boolean") {
-      classifierUseWeb = cls.useWeb;
-    }
-    if (cls && (cls.region === "fr" || cls.region === "us")) {
-      classifierRegion = cls.region;
-    }
+  if (!isPriceQ && !isLawQ && techGlobal) {
+    // Questions tech / globales non liées aux prix France -> on peut utiliser Google US
+    searchRegion = "us";
   }
 
-  // ======== BACKUP REGEX (au cas où le classifieur foire) ========
   const regexSuggestsWeb =
     isPriceQ ||
     isProdQ ||
     isPersonInRoleQuestion(effectiveQuestion) ||
     isLawQ ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
-    isSportsQ ||
+    isSportsResultOrStatQuestion(effectiveQuestion) ||
     /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
     );
 
-  // Décision finale : est-ce qu'on lance SerpAPI ?
-  let forceSearch = false;
-  if (classifierUseWeb === true) {
-    forceSearch = true;
-  } else if (classifierUseWeb === false) {
-    // Le classifieur dit NON explicitement
-    forceSearch = false;
-  } else {
-    // Pas de réponse claire du classifieur -> fallback regex
-    forceSearch = !isFutureQuestion && regexSuggestsWeb;
-  }
+  let shouldSearch = false;
+  let classificationUsed = false;
 
-  // Région finale : on écoute le classifieur, MAIS on force FR pour prix/lois/rôles
-  if (classifierRegion) {
-    searchRegion = classifierRegion;
-  }
-
-  if (isPriceQ || isLawQ || isPersonInRoleQuestion(effectiveQuestion)) {
-    // Sécurité : pour ces sujets, toujours FR
-    searchRegion = "fr";
+  if (!isFutureQuestion) {
+    if (regexSuggestsWeb) {
+      // Cas évidents: on force la recherche web
+      shouldSearch = true;
+    } else if (process.env.OPENAI_API_KEY) {
+      // Cas ambigus: on laisse gpt-4o décider via classifieur
+      classificationUsed = true;
+      shouldSearch = await classifyNeedWeb(effectiveQuestion, volatile);
+    }
   }
 
   let usedSearch = false;
 
-  if (forceSearch) {
+  if (shouldSearch) {
     try {
       log(
         "Web search triggered for question:",
         effectiveQuestion,
         "| region:",
         searchRegion,
-        "| classifierUseWeb:",
-        classifierUseWeb
+        "| classificationUsed:",
+        classificationUsed
       );
 
       let query = `${effectiveQuestion} ${currentYear}`;
@@ -720,7 +679,7 @@ app.post("/chat", async (req, res) => {
         usedSearch = true;
         const summary = filtered
           .slice(0, 3)
-          .map(r => `• ${r.title}\n  ${r.description}\n  (${r.url})`)
+          .map((r) => `• ${r.title}\n  ${r.description}\n  (${r.url})`)
           .join("\n\n");
 
         finalUserMessage = `
@@ -753,7 +712,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    const openAiModel = process.env.MODEL || "gpt-4o"; // TOUT passe par ce modèle
+    const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
     // Construire les messages avec historique court
@@ -773,7 +732,9 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       "| modeLabel:",
       modeLabel,
       "| history length:",
-      history.length
+      history.length,
+      "| classificationUsed:",
+      classificationUsed
     );
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -822,7 +783,13 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     }
     conversationByIp[userIp] = newHistory;
 
-    return res.json({ reply: answer, usedSearch, volatile, modeLabel });
+    return res.json({
+      reply: answer,
+      usedSearch,
+      volatile,
+      modeLabel,
+      classificationUsed
+    });
   } catch (e) {
     log("Erreur serveur:", e);
     return res.status(500).json({ error: "server_error", detail: String(e) });
@@ -836,54 +803,3 @@ app.get("*", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => log("TDIA server on http://localhost:" + port));
-
-/*
-=========================================================
-SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
-=========================================================
-
-.recherche-bar-premium {
-  position: relative;
-  width: 110px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.15);
-  overflow: hidden;
-  border-radius: 999px;
-}
-
-.recherche-bar-premium::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -40px;
-  width: 40px;
-  height: 100%;
-  background: linear-gradient(to right, #5be7c4, #6a7dff);
-  opacity: 0.9;
-  filter: blur(0.3px);
-  animation: tdiabar-slide 1.4s linear infinite;
-}
-
-@keyframes tdiabar-slide {
-  from { left: -40px; }
-  to   { left: 120px; }
-}
-
-// HTML
-// <div id="tdia-status">
-//   <span id="tdia-mode-label">TDIA réfléchis</span>
-//   <div id="tdia-bar-container" style="margin-top:6px; display:none;">
-//     <div class="recherche-bar-premium"></div>
-//   </div>
-// </div>
-
-// JS frontend (après le fetch):
-// response = { reply, usedSearch, volatile, modeLabel }
-
-// document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
-// const barContainer = document.getElementById("tdia-bar-container");
-// if (response.modeLabel === "recherche approfondie") {
-//   barContainer.style.display = "block";
-// } else {
-//   barContainer.style.display = "none";
-// }
