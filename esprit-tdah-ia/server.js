@@ -1,12 +1,9 @@
 // server.js
-// TDAI-6 - Backend complet avec OpenAI + SerpAPI + historique court
-
 import 'dotenv/config';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { OpenAI } from 'openai';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -15,215 +12,138 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const SERP_API_KEY = process.env.SERP_API_KEY || process.env.SERPAPI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const SERP_API_KEY = process.env.SERP_API_KEY;
 
-// Pour servir les fichiers statiques (front)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-app.use(express.static(path.join(__dirname, 'public')));
-
-// ---------------- CONFIG IA ----------------
-
+// --------- CONFIG IA ---------
 const SYSTEM_PROMPT = `
-Tu es TDAI, une IA conçue pour les esprits TDAH.
+Tu es TDAI, une IA spécialisée pour les esprits TDAH.
 
 Règles importantes :
-- L'utilisateur est en France. Quand tu parles de prix, d'abonnements, de services ou de produits, réponds par défaut pour la France, en euros, sauf si l'utilisateur demande clairement un autre pays.
-- Utilise l'historique de la conversation uniquement si la nouvelle question a un lien logique clair avec les derniers messages. Si l'utilisateur change de sujet (par exemple en posant une question sans rapport), traite cette nouvelle question comme un nouveau sujet et ne mélange pas avec l'ancien.
-- Si les résultats de recherche web sont contradictoires, incomplets ou peu clairs, dis que tu n'es pas sûr et propose de vérifier sur le site officiel, plutôt que d'inventer des chiffres ou des informations.
-- Quand tu donnes un prix, donne un montant clair (par exemple un prix mensuel et éventuellement annuel). Ne donne pas plusieurs fourchettes différentes.
-- Si tu as besoin de préciser le pays d'un prix que tu viens de citer, considère que, par défaut, il s'agit de la France, sauf mention explicite contraire.
-`.trim();
+- L'utilisateur est en France. Quand tu parles de prix ou d'abonnements, réponds par défaut pour la France, en euros, sauf si l'utilisateur te demande clairement un autre pays.
+- Utilise l'historique UNIQUEMENT si la nouvelle question a un lien logique avec les messages précédents. Si la question part sur un autre sujet, traite-la comme un nouveau sujet.
+- Si les résultats web sont contradictoires ou pas clairs, dis que tu n'es pas sûr et conseille de vérifier sur le site officiel, plutôt que d'inventer.
+- Pour les prix : donne 1 prix clair (mensuel et éventuellement annuel), pas 3 fourchettes différentes.
+`;
 
-/**
- * Construit la liste de messages à envoyer à OpenAI
- * On garde au maximum les 6 derniers messages de l'historique.
- */
+// On garde un historique par connexion (simplifié)
 function buildMessages(history, userMessage) {
-  const base = [
-    { role: 'system', content: SYSTEM_PROMPT },
-  ];
-
-  const trimmedHistory = history.slice(-6); // 6 derniers échanges (user/assistant confondus)
+  const base = [{ role: 'system', content: SYSTEM_PROMPT }];
+  const trimmedHistory = history.slice(-6); // 6 derniers messages max
   return [...base, ...trimmedHistory, { role: 'user', content: userMessage }];
 }
 
-/**
- * Détermine si on doit déclencher une recherche web via SerpAPI
- * (logique simple mais efficace).
- */
+// Détection simple : est-ce qu'on doit lancer SerpAPI ?
 function shouldSearch(userMessage) {
   const lower = userMessage.toLowerCase();
-
-  const priceKeywords = ['prix', 'combien', 'cb', 'tarif', 'abonnement', 'abo', 'coûte', 'coute'];
-  const webKeywords = ['google', 'internet', 'recherche', 'cherche sur', 'va voir'];
-
-  if (webKeywords.some(k => lower.includes(k))) return true;
-  if (priceKeywords.some(k => lower.includes(k))) return true;
-
-  // Tu peux ajouter d'autres mots-clés ici si besoin.
-  return false;
+  const keywords = ['prix', 'combien', 'cb', 'tarif', 'abonnement', 'amazon', 'prime'];
+  return keywords.some(k => lower.includes(k));
 }
 
-/**
- * Appel SerpAPI ciblé France.
- * On ajoute toujours "en France" au query + gl=fr / hl=fr.
- */
+// Appel SerpAPI ciblé France
 async function searchSerpAPI(query) {
-  if (!SERP_API_KEY) {
-    throw new Error('SERP_API_KEY manquante');
-  }
-
-  const q = `${query} en France`;
   const url = new URL('https://serpapi.com/search');
   url.searchParams.set('engine', 'google');
-  url.searchParams.set('q', q);
+  url.searchParams.set('q', `${query} en France`);
   url.searchParams.set('hl', 'fr');
   url.searchParams.set('gl', 'fr');
   url.searchParams.set('api_key', SERP_API_KEY);
 
-  console.log('[SerpAPI] Query envoyée :', q);
-
   const res = await fetch(url.toString());
-  if (!res.ok) {
-    console.error('[SerpAPI] Erreur HTTP :', res.status, await res.text());
-    throw new Error('Erreur SerpAPI');
-  }
-
+  if (!res.ok) throw new Error('Erreur SerpAPI');
   const data = await res.json();
 
-  // On garde les 3 premiers résultats organiques, résumés.
-  const organic = Array.isArray(data.organic_results) ? data.organic_results : [];
-  const results = organic.slice(0, 3).map(r => ({
+  // On extrait un résumé très simple (title + snippet des 3 premiers résultats)
+  const results = (data.organic_results || []).slice(0, 3).map(r => ({
     title: r.title,
     snippet: r.snippet,
     link: r.link,
   }));
 
-  console.log('[SerpAPI] Résumés :', results);
   return results;
 }
 
-/**
- * Appel OpenAI avec éventuellement les résultats SerpAPI comme contexte supplémentaire.
- */
 async function askOpenAI(messages, serpResults = null) {
-  if (serpResults && serpResults.length > 0) {
+  // Si on a des résultats web, on les ajoute comme contexte
+  if (serpResults) {
     const summary = serpResults
-      .map((r, i) => `${i + 1}. ${r.title}\n${r.snippet || ''}`)
+      .map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}`)
       .join('\n\n');
 
     messages.push({
       role: 'system',
       content: `
-Voici des résultats de recherche web (France) que tu dois utiliser pour répondre à la question.
-- Donne un prix clair en euros pour la France si l'utilisateur demande un prix ou un abonnement.
-- Si les informations sont contradictoires ou incertaines, dis-le explicitement et invite l'utilisateur à vérifier sur le site officiel.
-- Ne mélange pas ce contexte avec un autre sujet qui n'a rien à voir.
+Voici des résultats de recherche web (France) dont tu dois te servir.
+Ne donne qu'un prix clair en euros pour la France si possible.
+Si ces infos sont floues ou contradictoires, dis que tu n'es pas sûr.
 
-Résultats web résumés :
+Résultats :
 ${summary}
       `.trim(),
     });
   }
 
   const completion = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
+    model: 'gpt-4o-mini',
     messages,
     temperature: 0.3,
   });
 
-  const answer = completion.choices[0]?.message?.content?.trim() || "Je n'ai pas réussi à formuler une réponse. Réessaie ou précise ta question.";
-  return answer;
+  return completion.choices[0].message.content.trim();
 }
 
-// ---------------- SERVEUR HTTP ----------------
-
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
+// ------------ HTTP + WS -------------
 const server = app.listen(port, () => {
-  console.log(`TDAI backend listening on port ${port}`);
+  console.log(`Server listening on port ${port}`);
 });
-
-// ---------------- WEBSOCKET ----------------
 
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
-  console.log('[WS] Nouvelle connexion');
-
-  // Historique propre à cette connexion
+  // historique propre à cette connexion
   const history = [];
 
   ws.on('message', async (data) => {
     let payload;
     try {
       payload = JSON.parse(data.toString());
-    } catch (err) {
-      console.error('[WS] Payload invalide:', err);
+    } catch {
       return;
     }
 
     if (payload.type !== 'user_message') return;
+    const userMessage = payload.text?.toString() || '';
 
-    const userMessage = (payload.text || '').toString().trim();
-    if (!userMessage) return;
-
-    console.log('[User]', userMessage);
-
-    // Construction des messages avec historique (6 derniers)
+    // Construire messages avec historique (6 derniers)
     const messages = buildMessages(history, userMessage);
 
     let serpResults = null;
 
     try {
-      // 1) Optionnel : on peut envoyer un statut "thinking" si tu veux gérer ça côté front
-      // ws.send(JSON.stringify({ type: 'status', value: 'thinking' }));
-
-      // 2) Déclencher éventuellement SerpAPI
+      // On décide si on cherche sur le web
       if (SERP_API_KEY && shouldSearch(userMessage)) {
-        // Informer le front que la recherche web commence
+        // On informe le front qu'on lance une recherche
         ws.send(JSON.stringify({ type: 'status', value: 'searching-serpapi' }));
 
-        try {
-          serpResults = await searchSerpAPI(userMessage);
-        } catch (err) {
-          console.error('[SerpAPI] Erreur :', err.message);
-          serpResults = null; // on continue quand même sans résultats web
-        }
+        serpResults = await searchSerpAPI(userMessage);
 
-        // Informer le front que la recherche web est terminée
+        // Fin de la recherche
         ws.send(JSON.stringify({ type: 'status', value: 'searching-done' }));
       }
 
-      // 3) Appel OpenAI avec ou sans résultats web
       const answer = await askOpenAI(messages, serpResults);
 
-      console.log('[TDAI]', answer);
-
-      // 4) Mise à jour de l'historique
+      // On met à jour l'historique
       history.push({ role: 'user', content: userMessage });
       history.push({ role: 'assistant', content: answer });
 
-      // 5) Envoi de la réponse à l'UI
-      ws.send(JSON.stringify({
-        type: 'assistant_message',
-        text: answer,
-      }));
+      // On renvoie la réponse à l'UI
+      ws.send(JSON.stringify({ type: 'assistant_message', text: answer }));
     } catch (err) {
-      console.error('[WS] Erreur traitement message:', err);
-
+      console.error(err);
       ws.send(JSON.stringify({
         type: 'assistant_message',
-        text: "Je rencontre un souci technique pour l'instant. Vérifie ta connexion ou réessaie dans quelques instants.",
+        text: "Je rencontre un souci technique pour l'instant, réessaie dans un instant ou vérifie directement sur le site officiel.",
       }));
     }
-  });
-
-  ws.on('close', () => {
-    console.log('[WS] Connexion fermée');
   });
 });
