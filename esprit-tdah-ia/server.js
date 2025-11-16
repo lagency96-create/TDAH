@@ -19,10 +19,9 @@ app.use(express.static(path.join(__dirname, "public")));
 // Mémoire simple : dernière vraie question par IP
 const lastQuestionByIp = {};
 
-// Mémoire de conversation courte par IP (historique)
-// 6 messages = 3 tours (user + assistant)
-const conversationByIp = {};
-const MAX_HISTORY_MESSAGES = 6;
+// Mémoire courte de conversation : petit historique par IP
+// On stocke une liste de { role: "user" | "assistant", content: string }
+const historyByIp = {};
 
 // Petit helper de log horodaté
 function log(...args) {
@@ -48,7 +47,7 @@ function extractKeywords(question) {
     "quelles", "qui", "que", "quand", "ou", "où"
   ];
   const tokens = q.split(/[^a-z0-9]+/).filter(Boolean);
-  return tokens.filter((t) => t.length > 2 && !stopwords.includes(t));
+  return tokens.filter(t => t.length > 2 && !stopwords.includes(t));
 }
 
 function isPriceQuestion(question) {
@@ -82,18 +81,15 @@ function isDiagnosticMessage(message) {
 function isRecentLawOrPoliticsQuestion(question) {
   const q = normalizeText(question);
 
-  const hasLawWord =
-    /loi|lois|legislation|législation|decret|décret|amendement|ordonnance|code penal|code civil|reforme|réforme/.test(
-      q
-    );
-  const hasRecencyWord =
-    /dernier|derniere|derniers|dernieres|recent|recente|recents|recentes|nouvelle|nouvelles|vient d etre votee|vient d etre adoptee|vient d etre promulguee|votee hier|vote hier|adoptee hier|promulguee hier|cette semaine|ce mois ci|ce mois-ci/.test(
-      q
-    );
-  const hasFranceOrGov =
-    /france|assemblee nationale|assemblée nationale|senat|sénat|gouvernement|elysee|elysée|macron|ministre|president|président|parlement/.test(
-      q
-    );
+  const hasLawWord = /loi|lois|legislation|législation|decret|décret|amendement|ordonnance|code penal|code civil|reforme|réforme/.test(
+    q
+  );
+  const hasRecencyWord = /dernier|derniere|derniers|dernieres|recent|recente|recents|recentes|nouvelle|nouvelles|vient d etre votee|vient d etre adoptee|vient d etre promulguee|votee hier|vote hier|adoptee hier|promulguee hier|cette semaine|ce mois ci|ce mois-ci/.test(
+    q
+  );
+  const hasFranceOrGov = /france|assemblee nationale|assemblée nationale|senat|sénat|gouvernement|elysee|elysée|macron|ministre|president|président|parlement/.test(
+    q
+  );
 
   return hasLawWord && (hasRecencyWord || hasFranceOrGov);
 }
@@ -102,72 +98,26 @@ function isGenericCurrentAffairQuestion(question) {
   const q = normalizeText(question);
 
   // Politique / événements
-  if (
-    /election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(
-      q
-    )
-  ) {
+  if (/election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(q)) {
     return true;
   }
 
   // Résultats, scores, matchs récents
-  if (
-    /resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(
-      q
-    )
-  ) {
+  if (/resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(q)) {
     return true;
   }
 
   // Météo
-  if (
-    /meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(
-      q
-    )
-  ) {
+  if (/meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(q)) {
     return true;
   }
 
   // Statistiques économiques / chiffres récents
-  if (
-    /taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(
-      q
-    )
-  ) {
+  if (/taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(q)) {
     return true;
   }
 
   return false;
-}
-
-// Stats / résultats sportifs (Messi, Ronaldo, UFC, etc.)
-function isSportsResultOrStatQuestion(question) {
-  const q = normalizeText(question);
-
-  const hasSportsWord =
-    /foot|football|ligue 1|champions league|c1|premier league|nba|ufc|mma|tennis|roland garros|wimbledon|match|combat|fight|carte|fight card/.test(
-      q
-    );
-
-  const hasResultWord =
-    /resultat|résultat|score|qui a gagne|qui a gagné|k\.o|ko|tko|decision|décision/.test(
-      q
-    );
-
-  const hasStatWord =
-    /but|buts|goal|goals|passe dec|passes dec|passe décisive|stat|stats|statistiques|record|titre|trophees|trophées/.test(
-      q
-    );
-
-  const hasBigName =
-    /messi|ronaldo|mbappe|mbappé|neymar|haaland|benzema|zidane|gane|aspinall|mcgregor|adesanya|usman|ngannou/.test(
-      q
-    );
-
-  return (
-    (hasSportsWord && (hasResultWord || hasStatWord)) ||
-    (hasBigName && hasStatWord)
-  );
 }
 
 function isVolatileTopic(question) {
@@ -178,32 +128,10 @@ function isVolatileTopic(question) {
   if (isPersonInRoleQuestion(question)) return true;
   if (isRecentLawOrPoliticsQuestion(question)) return true;
   if (isGenericCurrentAffairQuestion(question)) return true;
-  if (isSportsResultOrStatQuestion(question)) return true;
 
   // Mention explicite de dates récentes ou contexte temps réel
   if (/202[3-9]|203\d/.test(q)) return true;
-  if (
-    /aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(
-      q
-    )
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-// ================== HELPER : QUESTIONS "TECH / GLOBAL" (GOOGLE US) ==================
-
-function isTechOrGlobalInfoQuestion(question) {
-  const q = normalizeText(question);
-
-  // IA / LLM / dev / SaaS / marketing / crypto / YouTube / SEO...
-  if (
-    /chatgpt|openai|claude|anthropic|llm|intelligence artificielle|ia generative|rag|agent ia|api|webhook|langchain|node js|javascript|react|next js|typescript|saas|notion|clickup|zapier|make\.com|make com|airtable|stripe|gumroad|shopify|youtube|thumbnail|ctr|watch time|seo|backlink|dropshipping|drop shipping|amazon fba|print on demand|crypto|bitcoin|ethereum|defi|nft|web3/.test(
-      q
-    )
-  ) {
+  if (/aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(q)) {
     return true;
   }
 
@@ -212,26 +140,16 @@ function isTechOrGlobalInfoQuestion(question) {
 
 // ================== SERPAPI SEARCH (WEB) ==================
 
-async function serpSearch(query, region = "fr") {
+async function serpSearch(query) {
   const apiKey = process.env.SERP_API_KEY;
   if (!apiKey) {
     log("SerpAPI key manquante (SERP_API_KEY)");
     return null;
   }
 
-  let hl = "fr";
-  let gl = "fr";
-  let googleDomain = "google.fr";
-
-  if (region === "us") {
-    hl = "en";
-    gl = "us";
-    googleDomain = "google.com";
-  }
-
   const url = `https://serpapi.com/search.json?q=${encodeURIComponent(
     query
-  )}&engine=google&hl=${hl}&gl=${gl}&google_domain=${googleDomain}&num=5&api_key=${apiKey}`;
+  )}&engine=google&hl=fr&num=5&api_key=${apiKey}`;
 
   log("SerpAPI request:", url);
 
@@ -247,7 +165,7 @@ async function serpSearch(query, region = "fr") {
 
   const organic = data.organic_results || [];
 
-  const mapped = organic.map((res) => ({
+  const mapped = organic.map(res => ({
     title: res.title || "",
     url: res.link || "",
     description: res.snippet || ""
@@ -264,7 +182,11 @@ function scoreWebResult(question, result, currentYear) {
   const qKeywords = extractKeywords(question);
 
   const text = normalizeText(
-    (result.title || "") + " " + (result.description || "") + " " + (result.url || "")
+    (result.title || "") +
+      " " +
+      (result.description || "") +
+      " " +
+      (result.url || "")
   );
 
   let score = 0;
@@ -294,28 +216,36 @@ function scoreWebResult(question, result, currentYear) {
   }
 
   // Pénalités thématiques hors sujet
-  const questionIsEntertainment =
-    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(qNorm);
-  const textIsEntertainment =
-    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(text);
+  const questionIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
+    qNorm
+  );
+  const textIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
+    text
+  );
   if (!questionIsEntertainment && textIsEntertainment) score -= 5;
 
-  const questionIsRealEstate =
-    /immobilier|loyer|appartement|maison|m2|mètre carré/.test(qNorm);
-  const textIsRealEstate =
-    /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(text);
+  const questionIsRealEstate = /immobilier|loyer|appartement|maison|m2|mètre carré/.test(
+    qNorm
+  );
+  const textIsRealEstate = /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(
+    text
+  );
   if (!questionIsRealEstate && textIsRealEstate) score -= 5;
 
-  const questionIsSports =
-    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(qNorm);
-  const textIsSports =
-    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(text);
+  const questionIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(
+    qNorm
+  );
+  const textIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(
+    text
+  );
   if (!questionIsSports && textIsSports) score -= 4;
 
-  const questionIsPolitics =
-    /élection|election|politique|présidentielle|gouvernement/.test(qNorm);
-  const textIsPolitics =
-    /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(text);
+  const questionIsPolitics = /élection|election|politique|présidentielle|gouvernement/.test(
+    qNorm
+  );
+  const textIsPolitics = /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(
+    text
+  );
   if (!questionIsPolitics && textIsPolitics) score -= 4;
 
   // Années trop futures / bonus récent
@@ -327,17 +257,8 @@ function scoreWebResult(question, result, currentYear) {
   }
 
   // Légers bonus sources fiables
-  if (
-    /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
-      text
-    )
-  ) {
+  if (/wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(text)) {
     score += 2;
-  }
-
-  // Bonus léger pour les sites clairement français (utile pour les prix France)
-  if (/\.fr(\/|$)/.test(result.url || "")) {
-    score += 1;
   }
 
   return score;
@@ -346,7 +267,7 @@ function scoreWebResult(question, result, currentYear) {
 function filterWebResults(question, results, currentYear) {
   if (!results || results.length === 0) return [];
 
-  const scored = results.map((r) => ({
+  const scored = results.map(r => ({
     result: r,
     score: scoreWebResult(question, r, currentYear)
   }));
@@ -361,85 +282,14 @@ function filterWebResults(question, results, currentYear) {
   }
 
   const filtered = scored
-    .filter((s) => s.score >= bestScore - 2 && s.score > 0)
-    .map((s) => s.result);
+    .filter(s => s.score >= bestScore - 2 && s.score > 0)
+    .map(s => s.result);
 
   log(
     `Filtrage: ${results.length} résultats initiaux, ${filtered.length} conservés (bestScore=${bestScore})`
   );
 
   return filtered;
-}
-
-// ================== CLASSIFIEUR IA (gpt-4o) ==================
-
-async function classifyNeedWeb(question, isVolatile) {
-  const openAiModel = process.env.MODEL || "gpt-4o";
-
-  const systemPrompt = `
-Tu es un petit classifieur.
-Ton SEUL rôle est de décider si la question de l'utilisateur nécessite une recherche web à jour (SerpAPI) ou non.
-
-Règle:
-- Réponds UNIQUEMENT par "web" ou "no_web".
-- "web" si la question demande des infos d'actualité, des chiffres récents, des résultats de match/combat, des lois récentes, des prix/abonnements, des personnes actuellement en poste, la météo, etc.
-- "no_web" si la question est théorique, historique ancienne, conseil, réflexion, développement personnel, explication générale, etc.
-
-Tu ne fais AUCUNE autre phrase. Juste "web" ou "no_web".
-`;
-
-  const body = {
-    model: openAiModel,
-    temperature: 0,
-    max_tokens: 5,
-    messages: [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: `Question: "${question}"
-Sujet potentiellement volatil (prix/actu/sport/lois/etc.) indiqué par le serveur: ${
-          isVolatile ? "oui" : "non"
-        }
-
-Dois-tu appeler le web ?`
-      }
-    ]
-  };
-
-  try {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!r.ok) {
-      const t = await r.text();
-      log("OpenAI classify error:", r.status, t);
-      return false;
-    }
-
-    const j = await r.json();
-    const content =
-      j.choices?.[0]?.message?.content?.trim().toLowerCase() || "";
-
-    if (content.includes("web")) {
-      return true;
-    }
-    if (content.includes("no_web")) {
-      return false;
-    }
-
-    // Réponse chelou -> fallback prudente : si isVolatile, on part sur web.
-    return !!isVolatile;
-  } catch (e) {
-    log("Erreur classifieur IA:", e);
-    // En cas de problème classifieur, on ne bloque pas tout.
-    return !!isVolatile;
-  }
 }
 
 // ================== SYSTEM PROMPT ==================
@@ -457,15 +307,6 @@ DATE ACTUELLE
 - Quand l'utilisateur parle de "maintenant", "actuellement", "en ce moment",
   tu te bases sur cette date et pas sur 2023.
 
-CONTEXTE PAYS / DEVISE
-- Tu supposes que l'utilisateur vit en France métropolitaine, sauf si la question parle clairement d'un autre pays.
-- Pour les prix, abonnements, services du quotidien, salaires, aides, impôts, transports,
-  et plus généralement tout ce qui dépend d'un pays, tu réponds TOUJOURS pour la France métropolitaine,
-  sauf si l'utilisateur demande explicitement un autre pays.
-- Tu donnes toujours les montants en euros (€) pour la France.
-- Tu ne donnes PAS de prix en dollars ou pour d'autres pays, sauf si la question le demande clairement
-  (ex: "aux États-Unis", "au Canada", etc.).
-
 FUTUR
 - Tu ne prédis jamais le futur par toi-même.
 - Tu n'inventes aucun événement futur.
@@ -478,6 +319,14 @@ SUJETS VOLATILS
 - Indication reçue pour cette question: sujet volatil = ${isVolatile ? "oui" : "non"}.
 - Si le sujet est volatil et que tu n'as pas de résultats web fiables, tu expliques clairement
   les limites de tes connaissances et tu invites l'utilisateur à vérifier sur une source officielle.
+
+MESSAGES SIMPLES / SALUTATIONS
+- Si le message de l'utilisateur est juste une salutation ou quelque chose de très vague
+  (par exemple "salut", "bonjour", "yo", "ça va ?", "wesh"),
+  tu lui réponds normalement avec un petit message d'accueil ou une question ouverte
+  pour lui demander ce dont il a besoin.
+- Dans ces cas-là, tu NE parles PAS de "je n'ai pas d'informations fiables ou récentes",
+  tu ne mentionnes pas les sources officielles, tu réponds juste de manière naturelle.
 
 MÊME SUJET QUE LA QUESTION
 - Ta réponse doit porter sur le même sujet explicite que la question :
@@ -496,13 +345,16 @@ RÉSULTATS WEB
 PRIX / CHIFFRES
 - Tu ne devines jamais un prix ou un chiffre précis.
 - Tu t'appuies sur les résultats web quand ils existent.
-- Tu cherches en priorité des prix pour la France, en euros.
-- Si les résultats ne donnent PAS de prix clair pour la France, tu dis que tu n'as pas de prix fiable
-  pour la France, au lieu de donner le prix d'un autre pays.
-- Si plusieurs pays sont mentionnés, tu ignores les prix étrangers et tu cherches uniquement l'information France.
-- Si tu utilises un prix pour la France qui date (par exemple trouvé en 2023), tu le dis clairement.
-- Si tu n'as pas de données fiables pour la France, tu expliques que tu ne peux pas donner de prix à jour
-  pour la France et tu invites à vérifier sur le site officiel concerné.
+- Si les sources donnent plusieurs valeurs, tu peux donner une fourchette et préciser que cela peut varier.
+- Si tu utilises une info datée (ex: prix trouvé en 2023), tu le dis clairement.
+- Si tu n'as pas de données fiables, tu dis que tu n'as pas de prix à jour.
+
+MEMOIRE COURTE / CONTEXTE
+- Le serveur peut te transmettre une petite partie récente de la conversation pour que tu restes cohérent.
+- Tu peux t'en servir pour comprendre les "au total", "pareil que tout à l'heure", "fais la même chose", etc.
+- Si l'utilisateur te demande si tu te "souviens", tu peux dire que tu vois seulement les derniers échanges
+  de la discussion, mais pas l'historique complet ni les anciennes conversations.
+- Tu ne donnes pas de détails techniques (pas de nombre exact de messages, pas de mention d'adresse IP, etc.).
 
 COHÉRENCE / CONTRÔLE
 - Avant de répondre, tu vérifies mentalement :
@@ -542,28 +394,20 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
-  // Récupérer l'historique pour cette IP
-  let history = conversationByIp[userIp];
-  if (!Array.isArray(history)) {
-    history = [];
-  }
-
   // Mode diagnostic interne
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
+    const historyForIp = historyByIp[userIp] || [];
+
     diag.push("Diagnostic TDIA :");
     diag.push(`- OpenAI MODEL: ${process.env.MODEL || "non défini"}`);
-    diag.push(`- OPENAI_API_KEY: ${
-      process.env.OPENAI_API_KEY ? "présente" : "absente"
-    }`);
-    diag.push(`- SERP_API_KEY: ${
-      process.env.SERP_API_KEY ? "présente" : "absente"
-    }`);
-    diag.push(`- Messages d'historique pour cette IP: ${history.length}`);
+    diag.push(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "présente" : "absente"}`);
+    diag.push(`- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`);
+    diag.push(`- Messages d'historique pour cette IP: ${historyForIp.length}`);
 
     try {
       if (process.env.SERP_API_KEY) {
-        const testResults = await serpSearch("test google actualité", "fr");
+        const testResults = await serpSearch("test google actualité");
         diag.push(
           `- Test SerpAPI: ${
             testResults && testResults.length > 0
@@ -611,75 +455,33 @@ app.post("/chat", async (req, res) => {
     );
 
   const volatile = isVolatileTopic(effectiveQuestion);
-  const techGlobal = isTechOrGlobalInfoQuestion(effectiveQuestion);
-
-  // Déterminer la région de recherche (FR par défaut, US pour certaines questions "global/tech")
-  let searchRegion = "fr";
-
-  // Pour les prix / lois / rôles de personnes, on reste toujours FR
-  const isPriceQ = isPriceQuestion(effectiveQuestion);
-  const isProdQ = isProductOrServiceQuestion(effectiveQuestion);
-  const isLawQ = isRecentLawOrPoliticsQuestion(effectiveQuestion);
-
-  if (!isPriceQ && !isLawQ && techGlobal) {
-    // Questions tech / globales non liées aux prix France -> on peut utiliser Google US
-    searchRegion = "us";
-  }
 
   const regexSuggestsWeb =
-    isPriceQ ||
-    isProdQ ||
+    isPriceQuestion(effectiveQuestion) ||
+    isProductOrServiceQuestion(effectiveQuestion) ||
     isPersonInRoleQuestion(effectiveQuestion) ||
-    isLawQ ||
+    isRecentLawOrPoliticsQuestion(effectiveQuestion) ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
-    isSportsResultOrStatQuestion(effectiveQuestion) ||
     /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
     );
 
-  let shouldSearch = false;
-  let classificationUsed = false;
-
-  if (!isFutureQuestion) {
-    if (regexSuggestsWeb) {
-      // Cas évidents: on force la recherche web
-      shouldSearch = true;
-    } else if (process.env.OPENAI_API_KEY) {
-      // Cas ambigus: on laisse gpt-4o décider via classifieur
-      classificationUsed = true;
-      shouldSearch = await classifyNeedWeb(effectiveQuestion, volatile);
-    }
-  }
+  const forceSearch = !isFutureQuestion && regexSuggestsWeb;
 
   let usedSearch = false;
 
-  if (shouldSearch) {
+  if (forceSearch) {
     try {
-      log(
-        "Web search triggered for question:",
-        effectiveQuestion,
-        "| region:",
-        searchRegion,
-        "| classificationUsed:",
-        classificationUsed
-      );
-
-      let query = `${effectiveQuestion} ${currentYear}`;
-
-      // Pour les prix / abonnements / produits -> forcer France / euros
-      if (isPriceQ || isProdQ) {
-        query = `${effectiveQuestion} prix en euros France site:.fr ${currentYear}`;
-        searchRegion = "fr"; // sécurité : pour les prix on ne veut jamais basculer US par défaut
-      }
-
-      const results = await serpSearch(query, searchRegion);
+      log("Web search triggered for question:", effectiveQuestion);
+      const query = `${effectiveQuestion} ${currentYear}`;
+      const results = await serpSearch(query);
       const filtered = filterWebResults(effectiveQuestion, results || [], currentYear);
 
       if (filtered.length > 0) {
         usedSearch = true;
         const summary = filtered
           .slice(0, 3)
-          .map((r) => `• ${r.title}\n  ${r.description}\n  (${r.url})`)
+          .map(r => `• ${r.title}\n  ${r.description}\n  (${r.url})`)
           .join("\n\n");
 
         finalUserMessage = `
@@ -715,10 +517,15 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
-    // Construire les messages avec historique court
-    const messages = [
+    // Récupérer l'historique court pour cette IP (mémoire courte)
+    let history = historyByIp[userIp] || [];
+    // On ne garde que les 6 derniers messages (3 tours)
+    const trimmedHistory = history.slice(-6);
+
+    // Construire les messages envoyés à OpenAI
+    const messagesForOpenAi = [
       { role: "system", content: buildSystemPrompt(currentDate, volatile) },
-      ...history,
+      ...trimmedHistory,
       { role: "user", content: finalUserMessage }
     ];
 
@@ -731,10 +538,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       volatile,
       "| modeLabel:",
       modeLabel,
-      "| history length:",
-      history.length,
-      "| classificationUsed:",
-      classificationUsed
+      "| historyMessagesSent:",
+      trimmedHistory.length
     );
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -746,7 +551,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       body: JSON.stringify({
         model: openAiModel,
         temperature: 0.35,
-        messages,
+        messages: messagesForOpenAi,
         max_tokens: 700
       })
     });
@@ -761,35 +566,22 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     const answer =
       j.choices?.[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
 
+    // Mise à jour de la dernière vraie question
     if (!isFollowUp) {
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
 
-    // Mettre à jour l'historique :
-    // on ne stocke PAS les gros résumés SerpAPI,
-    // juste la question "propre" et la réponse.
-    const historyUserContent = usedSearch
-      ? `Question (avec recherche web) : ${effectiveQuestion}`
-      : effectiveQuestion;
-
-    let newHistory = [
-      ...history,
-      { role: "user", content: historyUserContent },
-      { role: "assistant", content: answer }
-    ];
-
-    if (newHistory.length > MAX_HISTORY_MESSAGES) {
-      newHistory = newHistory.slice(-MAX_HISTORY_MESSAGES);
+    // Mise à jour de l'historique court pour cette IP
+    history.push({ role: "user", content: finalUserMessage });
+    history.push({ role: "assistant", content: answer });
+    // On limite à 12 messages max (6 tours) pour ne pas gonfler
+    if (history.length > 12) {
+      history = history.slice(-12);
     }
-    conversationByIp[userIp] = newHistory;
+    historyByIp[userIp] = history;
 
-    return res.json({
-      reply: answer,
-      usedSearch,
-      volatile,
-      modeLabel,
-      classificationUsed
-    });
+    // Frontend : tu peux utiliser modeLabel + usedSearch
+    return res.json({ reply: answer, usedSearch, volatile, modeLabel });
   } catch (e) {
     log("Erreur serveur:", e);
     return res.status(500).json({ error: "server_error", detail: String(e) });
@@ -803,3 +595,65 @@ app.get("*", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => log("TDIA server on http://localhost:" + port));
+
+/*
+=========================================================
+SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
+=========================================================
+
+Dans ton CSS (par exemple public/style.css) :
+
+.recherche-bar-premium {
+  position: relative;
+  width: 110px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.recherche-bar-premium::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -40px;
+  width: 40px;
+  height: 100%;
+  background: linear-gradient(to right, #5be7c4, #6a7dff);
+  opacity: 0.9;
+  filter: blur(0.3px);
+  animation: tdiabar-slide 1.4s linear infinite;
+}
+
+@keyframes tdiabar-slide {
+  from { left: -40px; }
+  to   { left: 120px; }
+}
+
+Dans ton HTML (zone statut IA) :
+
+<div id="tdia-status">
+  <span id="tdia-mode-label">TDIA réfléchis</span>
+  <div id="tdia-bar-container" style="margin-top:6px; display:none;">
+    <div class="recherche-bar-premium"></div>
+  </div>
+</div>
+
+Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
+
+// response = { reply, usedSearch, volatile, modeLabel }
+
+document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
+
+const barContainer = document.getElementById("tdia-bar-container");
+if (response.modeLabel === "recherche approfondie") {
+  barContainer.style.display = "block";
+} else {
+  barContainer.style.display = "none";
+}
+
+Comme ça :
+- par défaut tu peux afficher "TDIA réfléchis"
+- si le backend renvoie modeLabel = "recherche approfondie" (usedSearch = true),
+  la petite barre premium apparaît, en animation infinie, tant que la réponse est en cours ou affichée.
+*/
