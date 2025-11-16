@@ -139,18 +139,45 @@ function isVolatileTopic(question) {
   return false;
 }
 
+// ================== HELPER : QUESTIONS "TECH / GLOBAL" (GOOGLE US) ==================
+
+function isTechOrGlobalInfoQuestion(question) {
+  const q = normalizeText(question);
+
+  // IA / LLM / dev / SaaS / marketing / crypto / YouTube / SEO...
+  if (
+    /chatgpt|openai|claude|anthropic|llm|intelligence artificielle|ia generative|rag|agent ia|api|webhook|langchain|node js|javascript|react|next js|typescript|saas|notion|clickup|zapier|make\.com|make com|airtable|stripe|gumroad|shopify|youtube|thumbnail|ctr|watch time|seo|backlink|dropshipping|drop shipping|amazon fba|print on demand|crypto|bitcoin|ethereum|defi|nft|web3/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 // ================== SERPAPI SEARCH (WEB) ==================
 
-async function serpSearch(query) {
+async function serpSearch(query, region = "fr") {
   const apiKey = process.env.SERP_API_KEY;
   if (!apiKey) {
     log("SerpAPI key manquante (SERP_API_KEY)");
     return null;
   }
 
+  let hl = "fr";
+  let gl = "fr";
+  let googleDomain = "google.fr";
+
+  if (region === "us") {
+    hl = "en";
+    gl = "us";
+    googleDomain = "google.com";
+  }
+
   const url = `https://serpapi.com/search.json?q=${encodeURIComponent(
     query
-  )}&engine=google&hl=fr&num=5&api_key=${apiKey}`;
+  )}&engine=google&hl=${hl}&gl=${gl}&google_domain=${googleDomain}&num=5&api_key=${apiKey}`;
 
   log("SerpAPI request:", url);
 
@@ -262,6 +289,11 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
+  // Bonus léger pour les sites clairement français (utile pour les prix France)
+  if (/\.fr(\/|$)/.test(result.url || "")) {
+    score += 1;
+  }
+
   return score;
 }
 
@@ -308,6 +340,15 @@ DATE ACTUELLE
 - Quand l'utilisateur parle de "maintenant", "actuellement", "en ce moment",
   tu te bases sur cette date et pas sur 2023.
 
+CONTEXTE PAYS / DEVISE
+- Tu supposes que l'utilisateur vit en France métropolitaine, sauf si la question parle clairement d'un autre pays.
+- Pour les prix, abonnements, services du quotidien, salaires, aides, impôts, transports,
+  et plus généralement tout ce qui dépend d'un pays, tu réponds TOUJOURS pour la France métropolitaine,
+  sauf si l'utilisateur demande explicitement un autre pays.
+- Tu donnes toujours les montants en euros (€) pour la France.
+- Tu ne donnes PAS de prix en dollars ou pour d'autres pays, sauf si la question le demande clairement
+  (ex: "aux États-Unis", "au Canada", etc.).
+
 FUTUR
 - Tu ne prédis jamais le futur par toi-même.
 - Tu n'inventes aucun événement futur.
@@ -338,9 +379,13 @@ RÉSULTATS WEB
 PRIX / CHIFFRES
 - Tu ne devines jamais un prix ou un chiffre précis.
 - Tu t'appuies sur les résultats web quand ils existent.
-- Si les sources donnent plusieurs valeurs, tu peux donner une fourchette et préciser que cela peut varier.
-- Si tu utilises une info datée (ex: prix trouvé en 2023), tu le dis clairement.
-- Si tu n'as pas de données fiables, tu dis que tu n'as pas de prix à jour.
+- Tu cherches en priorité des prix pour la France, en euros.
+- Si les résultats ne donnent PAS de prix clair pour la France, tu dis que tu n'as pas de prix fiable
+  pour la France, au lieu de donner le prix d'un autre pays.
+- Si plusieurs pays sont mentionnés, tu ignores les prix étrangers et tu cherches uniquement l'information France.
+- Si tu utilises un prix pour la France qui date (par exemple trouvé en 2023), tu le dis clairement.
+- Si tu n'as pas de données fiables pour la France, tu expliques que tu ne peux pas donner de prix à jour
+  pour la France et tu invites à vérifier sur le site officiel concerné.
 
 COHÉRENCE / CONTRÔLE
 - Avant de répondre, tu vérifies mentalement :
@@ -397,7 +442,7 @@ app.post("/chat", async (req, res) => {
 
     try {
       if (process.env.SERP_API_KEY) {
-        const testResults = await serpSearch("test google actualité");
+        const testResults = await serpSearch("test google actualité", "fr");
         diag.push(
           `- Test SerpAPI: ${
             testResults && testResults.length > 0
@@ -445,12 +490,26 @@ app.post("/chat", async (req, res) => {
     );
 
   const volatile = isVolatileTopic(effectiveQuestion);
+  const techGlobal = isTechOrGlobalInfoQuestion(effectiveQuestion);
+
+  // Déterminer la région de recherche (FR par défaut, US pour certaines questions "global/tech")
+  let searchRegion = "fr";
+
+  // Pour les prix / lois / rôles de personnes, on reste toujours FR
+  const isPriceQ = isPriceQuestion(effectiveQuestion);
+  const isProdQ = isProductOrServiceQuestion(effectiveQuestion);
+  const isLawQ = isRecentLawOrPoliticsQuestion(effectiveQuestion);
+
+  if (!isPriceQ && !isLawQ && techGlobal) {
+    // Questions tech / globales non liées aux prix France -> on peut utiliser Google US
+    searchRegion = "us";
+  }
 
   const regexSuggestsWeb =
-    isPriceQuestion(effectiveQuestion) ||
-    isProductOrServiceQuestion(effectiveQuestion) ||
+    isPriceQ ||
+    isProdQ ||
     isPersonInRoleQuestion(effectiveQuestion) ||
-    isRecentLawOrPoliticsQuestion(effectiveQuestion) ||
+    isLawQ ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
     /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
@@ -462,9 +521,22 @@ app.post("/chat", async (req, res) => {
 
   if (forceSearch) {
     try {
-      log("Web search triggered for question:", effectiveQuestion);
-      const query = `${effectiveQuestion} ${currentYear}`;
-      const results = await serpSearch(query);
+      log(
+        "Web search triggered for question:",
+        effectiveQuestion,
+        "| region:",
+        searchRegion
+      );
+
+      let query = `${effectiveQuestion} ${currentYear}`;
+
+      // Pour les prix / abonnements / produits -> forcer France / euros
+      if (isPriceQ || isProdQ) {
+        query = `${effectiveQuestion} prix en euros France site:.fr ${currentYear}`;
+        searchRegion = "fr"; // sécurité : pour les prix on ne veut jamais basculer US par défaut
+      }
+
+      const results = await serpSearch(query, searchRegion);
       const filtered = filterWebResults(effectiveQuestion, results || [], currentYear);
 
       if (filtered.length > 0) {
