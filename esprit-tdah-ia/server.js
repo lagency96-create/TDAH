@@ -19,6 +19,11 @@ app.use(express.static(path.join(__dirname, "public")));
 // Mémoire simple : dernière vraie question par IP
 const lastQuestionByIp = {};
 
+// Mémoire de conversation courte par IP (historique)
+// 6 messages = 3 tours (user + assistant)
+const conversationByIp = {};
+const MAX_HISTORY_MESSAGES = 6;
+
 // Petit helper de log horodaté
 function log(...args) {
   const ts = new Date().toISOString();
@@ -323,7 +328,7 @@ MÊME SUJET QUE LA QUESTION
 - Si tu te rends compte que tu es sorti du sujet, tu le dis et tu te recentres.
 
 RÉSULTATS WEB
-- Le serveur peut t'envoyer un résumé de résultats web déjà filtrés.
+- Le serveur peut te envoyer un résumé de résultats web déjà filtrés.
 - Tu utilises ces infos comme base principale pour l'actualité, les prix, les abonnements,
   les personnes en poste, les chiffres récents, etc.
 - Tu synthétises et vulgarises, tu ne recopie pas les liens.
@@ -375,6 +380,12 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
+  // Récupérer l'historique pour cette IP
+  let history = conversationByIp[userIp];
+  if (!Array.isArray(history)) {
+    history = [];
+  }
+
   // Mode diagnostic interne
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
@@ -382,6 +393,7 @@ app.post("/chat", async (req, res) => {
     diag.push(`- OpenAI MODEL: ${process.env.MODEL || "non défini"}`);
     diag.push(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "présente" : "absente"}`);
     diag.push(`- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`);
+    diag.push(`- Messages d'historique pour cette IP: ${history.length}`);
 
     try {
       if (process.env.SERP_API_KEY) {
@@ -495,6 +507,13 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
+    // Construire les messages avec historique court
+    const messages = [
+      { role: "system", content: buildSystemPrompt(currentDate, volatile) },
+      ...history,
+      { role: "user", content: finalUserMessage }
+    ];
+
     log(
       "Calling OpenAI with model:",
       openAiModel,
@@ -503,7 +522,9 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       "| volatile:",
       volatile,
       "| modeLabel:",
-      modeLabel
+      modeLabel,
+      "| history length:",
+      history.length
     );
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -515,10 +536,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       body: JSON.stringify({
         model: openAiModel,
         temperature: 0.35,
-        messages: [
-          { role: "system", content: buildSystemPrompt(currentDate, volatile) },
-          { role: "user", content: finalUserMessage }
-        ],
+        messages,
         max_tokens: 700
       })
     });
@@ -537,7 +555,24 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
 
-    // Frontend : tu peux utiliser modeLabel + usedSearch
+    // Mettre à jour l'historique :
+    // on ne stocke PAS les gros résumés SerpAPI,
+    // juste la question "propre" et la réponse.
+    const historyUserContent = usedSearch
+      ? `Question (avec recherche web) : ${effectiveQuestion}`
+      : effectiveQuestion;
+
+    let newHistory = [
+      ...history,
+      { role: "user", content: historyUserContent },
+      { role: "assistant", content: answer }
+    ];
+
+    if (newHistory.length > MAX_HISTORY_MESSAGES) {
+      newHistory = newHistory.slice(-MAX_HISTORY_MESSAGES);
+    }
+    conversationByIp[userIp] = newHistory;
+
     return res.json({ reply: answer, usedSearch, volatile, modeLabel });
   } catch (e) {
     log("Erreur serveur:", e);
@@ -557,8 +592,6 @@ app.listen(port, () => log("TDIA server on http://localhost:" + port));
 =========================================================
 SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
 =========================================================
-
-Dans ton CSS (par exemple public/style.css) :
 
 .recherche-bar-premium {
   position: relative;
@@ -587,30 +620,22 @@ Dans ton CSS (par exemple public/style.css) :
   to   { left: 120px; }
 }
 
-Dans ton HTML (zone statut IA) :
+// HTML
+// <div id="tdia-status">
+//   <span id="tdia-mode-label">TDIA réfléchis</span>
+//   <div id="tdia-bar-container" style="margin-top:6px; display:none;">
+//     <div class="recherche-bar-premium"></div>
+//   </div>
+// </div>
 
-<div id="tdia-status">
-  <span id="tdia-mode-label">TDIA réfléchis</span>
-  <div id="tdia-bar-container" style="margin-top:6px; display:none;">
-    <div class="recherche-bar-premium"></div>
-  </div>
-</div>
-
-Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
-
+// JS frontend (après le fetch):
 // response = { reply, usedSearch, volatile, modeLabel }
 
-document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
-
-const barContainer = document.getElementById("tdia-bar-container");
-if (response.modeLabel === "recherche approfondie") {
-  barContainer.style.display = "block";
-} else {
-  barContainer.style.display = "none";
-}
-
-Comme ça :
-- par défaut tu peux afficher "TDIA réfléchis"
-- si le backend renvoie modeLabel = "recherche approfondie" (usedSearch = true),
-  la petite barre premium apparaît, en animation infinie, tant que la réponse est en cours ou affichée.
+// document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
+// const barContainer = document.getElementById("tdia-bar-container");
+// if (response.modeLabel === "recherche approfondie") {
+//   barContainer.style.display = "block";
+// } else {
+//   barContainer.style.display = "none";
+// }
 */
