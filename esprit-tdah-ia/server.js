@@ -273,6 +273,9 @@ async function serpSearch(query) {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
+// Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
+// Objectif : garder les bons résultats (comme sur Gane vs Aspinall)
+// au lieu de tout rejeter pour un détail.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
@@ -287,7 +290,7 @@ function scoreWebResult(question, result, currentYear) {
 
   let score = 0;
 
-  // Overlap mots-clés
+  // Overlap mots-clés (coeur de la pertinence)
   let overlap = 0;
   for (const kw of qKeywords) {
     if (kw && text.includes(kw)) {
@@ -295,7 +298,8 @@ function scoreWebResult(question, result, currentYear) {
       score += 2;
     }
   }
-  if (overlap === 0) score -= 4;
+  // Si aucun mot clé en commun, légère pénalité (mais pas -4)
+  if (overlap === 0) score -= 2;
 
   const qIsPrice = isPriceQuestion(question);
   const qIsProd = isProductOrServiceQuestion(question);
@@ -311,40 +315,59 @@ function scoreWebResult(question, result, currentYear) {
     score += 3;
   }
 
-  // Pénalités thématiques hors sujet
-  const questionIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
-    qNorm
-  );
-  const textIsEntertainment = /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga/.test(
-    text
-  );
-  if (!questionIsEntertainment && textIsEntertainment) score -= 5;
+  // Sport : on ne pénalise plus, on ne fait que récompenser quand ça colle vraiment.
+  const questionIsSports =
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score|gane|aspinall|mbappe|mbappé|messi|ronaldo/.test(
+      qNorm
+    );
+  const textIsSports =
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score|but|buts|ko|tko/.test(
+      text
+    );
+  if (questionIsSports && textIsSports) {
+    score += 2;
+  }
 
-  const questionIsRealEstate = /immobilier|loyer|appartement|maison|m2|mètre carré/.test(
-    qNorm
-  );
-  const textIsRealEstate = /immobilier|real estate|foncier|fonciere|foncière|loyer/.test(
-    text
-  );
-  if (!questionIsRealEstate && textIsRealEstate) score -= 5;
+  // Politique / lois : bonus léger quand question et texte sont sur ce thème.
+  const questionIsPolitics =
+    /élection|election|politique|présidentielle|gouvernement|loi|lois|décret|decret|parlement|assemblée nationale|assemblee nationale|sénat|senat/.test(
+      qNorm
+    );
+  const textIsPolitics =
+    /élection|election|politique|présidentielle|gouvernement|vote|scrutin|loi|décret|decret|parlement|assemblée nationale|assemblee nationale|sénat|senat/.test(
+      text
+    );
+  if (questionIsPolitics && textIsPolitics) {
+    score += 2;
+  }
 
-  const questionIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match/.test(
-    qNorm
-  );
-  const textIsSports = /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score/.test(
-    text
-  );
-  if (!questionIsSports && textIsSports) score -= 4;
+  // Immobilier : bonus léger quand ça colle vraiment.
+  const questionIsRealEstate =
+    /immobilier|loyer|appartement|maison|m2|mètre carré|metre carre|achat maison|achat appartement/.test(
+      qNorm
+    );
+  const textIsRealEstate =
+    /immobilier|real estate|foncier|fonciere|foncière|loyer|agence immobiliere|agence immobilière/.test(
+      text
+    );
+  if (questionIsRealEstate && textIsRealEstate) {
+    score += 2;
+  }
 
-  const questionIsPolitics = /élection|election|politique|présidentielle|gouvernement/.test(
-    qNorm
-  );
-  const textIsPolitics = /élection|election|politique|présidentielle|gouvernement|vote|scrutin/.test(
-    text
-  );
-  if (!questionIsPolitics && textIsPolitics) score -= 4;
+  // Divertissement (films, séries, etc.) : bonus léger si question ET texte
+  const questionIsEntertainment =
+    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga|netflix|cinema|cinéma/.test(
+      qNorm
+    );
+  const textIsEntertainment =
+    /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga|netflix|cinema|cinéma/.test(
+      text
+    );
+  if (questionIsEntertainment && textIsEntertainment) {
+    score += 2;
+  }
 
-  // Années trop futures / bonus récent
+  // Années : bonus si récent, petite pénalité si trop futuriste.
   const years = text.match(/20\d{2}/g) || [];
   for (const yStr of years) {
     const y = parseInt(yStr, 10);
@@ -372,17 +395,42 @@ function filterWebResults(question, results, currentYear) {
 
   const bestScore = scored[0]?.score ?? -999;
 
-  if (bestScore < 4) {
-    log("Filtrage: meilleur score trop faible, aucun résultat retenu");
+  // Nouveau : seuil beaucoup plus souple.
+  // Si vraiment tout est très mauvais (< 0), on considère qu'on n'a rien d'utilisable.
+  if (bestScore < 0) {
+    log(
+      "Filtrage: meilleur score < 0, aucun résultat retenu",
+      "| bestScore:",
+      bestScore,
+      "| question:",
+      question
+    );
     return [];
   }
 
-  const filtered = scored
-    .filter(s => s.score >= bestScore - 2 && s.score > 0)
+  // On garde tous les résultats dont le score est proche du meilleur
+  // et au moins >= 0 (pour éviter les gros hors sujet).
+  const threshold = Math.max(bestScore - 3, 0);
+
+  let filtered = scored
+    .filter(s => s.score >= threshold)
     .map(s => s.result);
 
+  // Sécurité : si pour une raison ou une autre on a tout filtré,
+  // on garde au moins le meilleur résultat brut.
+  if (filtered.length === 0 && scored.length > 0) {
+    filtered = [scored[0].result];
+    log(
+      "Filtrage: tous filtrés par threshold, on garde malgré tout le meilleur résultat par sécurité",
+      "| bestScore:",
+      bestScore,
+      "| question:",
+      question
+    );
+  }
+
   log(
-    `Filtrage: ${results.length} résultats initiaux, ${filtered.length} conservés (bestScore=${bestScore})`
+    `Filtrage: ${results.length} résultats initiaux, ${filtered.length} conservés (bestScore=${bestScore}, threshold=${threshold})`
   );
 
   return filtered;
@@ -415,6 +463,15 @@ SUJETS VOLATILS
 - Indication reçue pour cette question: sujet volatil = ${isVolatile ? "oui" : "non"}.
 - Si le sujet est volatil et que tu n'as pas de résultats web fiables, tu expliques clairement
   les limites de tes connaissances et tu invites l'utilisateur à vérifier sur une source officielle.
+
+SPORT / RÉSULTATS / SCORES
+- Si la question concerne clairement un match, un combat, un résultat sportif ("qui a gagné", "ça a donné quoi",
+  "score", "résultat", noms de sportifs ou de clubs associés à un événement récent),
+  tu considères que c'est un sujet très volatile.
+- Si le serveur t'a envoyé des résultats web, tu te bases en priorité sur ces résultats récents
+  et tu ignores tes anciennes connaissances si elles sont différentes.
+- Si les résultats web manquent ou sont flous, tu expliques que tu n'as pas les infos exactes
+  plutôt que d'inventer un score ou un vainqueur.
 
 MESSAGES SIMPLES / SALUTATIONS
 - Si le message de l'utilisateur est juste une salutation ou quelque chose de très vague
@@ -591,6 +648,7 @@ app.post("/chat", async (req, res) => {
     !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb);
 
   let usedSearch = false;
+  let lastScoredInfo = null; // pour debug si besoin
 
   if (forceSearch) {
     try {
@@ -598,6 +656,14 @@ app.post("/chat", async (req, res) => {
       const query = `${effectiveQuestion} ${currentYear}`;
       const results = await serpSearch(query);
       const filtered = filterWebResults(effectiveQuestion, results || [], currentYear);
+
+      if (results && results.length > 0 && filtered.length === 0) {
+        log(
+          "WARNING: recherche web déclenchée, résultats SerpAPI présents mais tous filtrés",
+          "| question:",
+          effectiveQuestion
+        );
+      }
 
       if (filtered.length > 0) {
         usedSearch = true;
@@ -619,7 +685,7 @@ En te basant en priorité sur ces informations RÉCENTES ET PERTINENTES :
 - Si les sources sont incertaines ou partielles, dis-le.
 `;
       } else {
-        log("Aucun résultat web fiable, on demande au modèle de ne pas inventer");
+        log("Aucun résultat web fiable après filtrage, on demande au modèle de ne pas inventer");
         finalUserMessage = `
 La question de l'utilisateur est :
 "${effectiveQuestion}"
