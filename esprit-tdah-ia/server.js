@@ -120,6 +120,7 @@ function isGenericCurrentAffairQuestion(question) {
   return false;
 }
 
+// Volatilité "classique" (regex)
 function isVolatileTopic(question) {
   const q = normalizeText(question);
 
@@ -136,6 +137,101 @@ function isVolatileTopic(question) {
   }
 
   return false;
+}
+
+// ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
+
+async function classifyQuestionWithAI(question) {
+  const openAiModel = process.env.MODEL || "gpt-4o";
+
+  const promptSystem = `
+Tu es un classifieur pour TDIA.
+Ton but est de comprendre le SUJET de la question de l'utilisateur
+et de décider si on doit aller chercher des infos RÉCENTES sur le web.
+
+Tu ne donnes jamais de texte normal, seulement du JSON valide.
+
+- "domain" = une seule étiquette parmi :
+  "sport", "prix_abonnement", "produit_tech", "lois_politique",
+  "finance", "sante", "psycho", "culture", "actualite_generale",
+  "tdah", "chit_chat", "autre"
+
+- "needs_web" = true si la réponse dépend fortement d'infos récentes
+  (résultats sportifs, lois votées récemment, prix actuels, météo, stats du moment, élections, résultats d'entreprises, événements récents).
+  Sinon false.
+
+- "volatility" = "high" si ça change vite (sport, lois récentes, prix, économie, météo, actualité),
+  "medium" si ça évolue de temps en temps,
+  "low" si c'est plutôt stable (définitions, psycho, TDAH, conseils de vie).
+
+- "country" = "france" par défaut, sauf si la question vise clairement un autre pays
+  (par exemple "aux Etats-Unis", "au Canada", etc.).
+
+Tu réponds TOUJOURS avec un JSON STRICT de ce type :
+
+{
+  "domain": "...",
+  "needs_web": true/false,
+  "volatility": "high" | "medium" | "low",
+  "country": "france" ou "autre_pays"
+}
+
+Jamais d'autre texte que ce JSON.
+`;
+
+  const body = {
+    model: openAiModel,
+    temperature: 0,
+    max_tokens: 120,
+    messages: [
+      { role: "system", content: promptSystem },
+      {
+        role: "user",
+        content:
+          `Question de l'utilisateur :\n` +
+          `"${String(question || "").trim()}"\n\n` +
+          `Donne uniquement le JSON.`
+      }
+    ]
+  };
+
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const txt = await r.text();
+      log("Erreur classifieur IA:", r.status, txt);
+      return null; // fallback regex
+    }
+
+    const j = await r.json();
+    const raw = j.choices?.[0]?.message?.content || "";
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      log("JSON classifieur IA invalide, contenu brut:", raw);
+      return null;
+    }
+
+    return {
+      domain: parsed.domain || "autre",
+      needs_web: Boolean(parsed.needs_web),
+      volatility: parsed.volatility || "low",
+      country: parsed.country || "france"
+    };
+  } catch (e) {
+    log("Exception classifieur IA:", e);
+    return null;
+  }
 }
 
 // ================== SERPAPI SEARCH (WEB) ==================
@@ -454,8 +550,10 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
-  const volatile = isVolatileTopic(effectiveQuestion);
+  // Volatilité regex "classique"
+  const volatileRegex = isVolatileTopic(effectiveQuestion);
 
+  // Ancienne logique regex (backup) pour dire "ça sent le web"
   const regexSuggestsWeb =
     isPriceQuestion(effectiveQuestion) ||
     isProductOrServiceQuestion(effectiveQuestion) ||
@@ -466,7 +564,31 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
-  const forceSearch = !isFutureQuestion && regexSuggestsWeb;
+  // Nouveau : classifieur IA général
+  let aiClass = await classifyQuestionWithAI(effectiveQuestion);
+  if (aiClass) {
+    log(
+      "Classifieur IA -> domain:",
+      aiClass.domain,
+      "| needs_web:",
+      aiClass.needs_web,
+      "| volatility:",
+      aiClass.volatility,
+      "| country:",
+      aiClass.country
+    );
+  } else {
+    log("Classifieur IA indisponible, fallback regex uniquement");
+  }
+
+  const needsWebFromAI = aiClass ? aiClass.needs_web : false;
+  const volatileFromAI =
+    aiClass && (aiClass.volatility === "high" || aiClass.volatility === "medium");
+
+  const finalVolatile = volatileRegex || volatileFromAI;
+
+  const forceSearch =
+    !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb);
 
   let usedSearch = false;
 
@@ -522,9 +644,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     // On ne garde que les 6 derniers messages (3 tours)
     const trimmedHistory = history.slice(-6);
 
-    // Construire les messages envoyés à OpenAI
     const messagesForOpenAi = [
-      { role: "system", content: buildSystemPrompt(currentDate, volatile) },
+      { role: "system", content: buildSystemPrompt(currentDate, finalVolatile) },
       ...trimmedHistory,
       { role: "user", content: finalUserMessage }
     ];
@@ -534,8 +655,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       openAiModel,
       "| usedSearch:",
       usedSearch,
-      "| volatile:",
-      volatile,
+      "| volatileFinal:",
+      finalVolatile,
       "| modeLabel:",
       modeLabel,
       "| historyMessagesSent:",
@@ -574,14 +695,19 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     // Mise à jour de l'historique court pour cette IP
     history.push({ role: "user", content: finalUserMessage });
     history.push({ role: "assistant", content: answer });
-    // On limite à 12 messages max (6 tours) pour ne pas gonfler
     if (history.length > 12) {
       history = history.slice(-12);
     }
     historyByIp[userIp] = history;
 
-    // Frontend : tu peux utiliser modeLabel + usedSearch
-    return res.json({ reply: answer, usedSearch, volatile, modeLabel });
+    return res.json({
+      reply: answer,
+      usedSearch,
+      volatile: finalVolatile,
+      modeLabel,
+      domain: aiClass ? aiClass.domain : null,
+      country: aiClass ? aiClass.country : "france"
+    });
   } catch (e) {
     log("Erreur serveur:", e);
     return res.status(500).json({ error: "server_error", detail: String(e) });
@@ -641,7 +767,7 @@ Dans ton HTML (zone statut IA) :
 
 Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
 
-// response = { reply, usedSearch, volatile, modeLabel }
+// response = { reply, usedSearch, volatile, modeLabel, domain, country }
 
 document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
 
