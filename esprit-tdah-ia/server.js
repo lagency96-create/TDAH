@@ -1,4 +1,4 @@
-// server.js - TDIA avec gpt-5.1 (principal) + gpt-5-mini (classifieur) + SerpAPI
+// server.js - TDIA avec gpt-5.1 (principal) + gpt-5-mini (classifieur + router) + SerpAPI
 
 import express from "express";
 import cors from "cors";
@@ -205,7 +205,6 @@ Jamais d'autre texte que ce JSON.
 
   const body = {
     model: openAiModel,
-    // temperature est accepté, on le laisse à 0 pour un classifieur stable
     temperature: 0,
     max_completion_tokens: 120,
     messages: [
@@ -259,6 +258,91 @@ Jamais d'autre texte que ce JSON.
   }
 }
 
+// ================== ROUTER + NER (détection X vs Y, domaine, entités) ==================
+
+async function analyzeEntitiesAndIntent(question) {
+  const routerModel =
+    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
+
+  const promptSystem = `
+Tu es un analyseur d'entités pour TDIA.
+
+Tu reçois une question, parfois très courte (par exemple juste "X vs Y").
+Ton travail :
+- extraire les entités nommées (personnes, organisations, lieux, autres),
+- dire si la question ressemble à un duel / match / combat (pattern "X vs Y", "X contre Y"...),
+- indiquer le domaine le plus probable : "sport", "politique", "business", "divertissement", "autre".
+
+Tu NE connais pas forcément les noms, ce n'est pas grave.
+Tu te bases sur la structure de la phrase et le contexte.
+
+Tu réponds TOUJOURS avec un JSON STRICT de ce type :
+
+{
+  "entities": [
+    { "text": "...", "type": "person|organization|location|other" }
+  ],
+  "is_vs_pattern": true/false,
+  "likely_domain": "sport" | "politique" | "business" | "divertissement" | "autre"
+}
+
+Règles :
+- Si tu n'es pas sûr du domaine, mets "autre".
+- Même si tu ne connais pas les noms, tu essaies de détecter si c'est une structure "X vs Y".
+- Pas d'autre texte que ce JSON.
+`;
+
+  const body = {
+    model: routerModel,
+    temperature: 0,
+    max_completion_tokens: 160,
+    messages: [
+      { role: "system", content: promptSystem },
+      {
+        role: "user",
+        content: `Texte utilisateur : "${String(question || "").trim()}"\n\nDonne UNIQUEMENT le JSON décrit.`
+      }
+    ]
+  };
+
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const txt = await r.text();
+      log("Erreur router/NER:", r.status, txt);
+      return null;
+    }
+
+    const j = await r.json();
+    const raw = j.choices?.[0]?.message?.content || "";
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      log("JSON router/NER invalide, brut:", raw);
+      return null;
+    }
+
+    const entities = Array.isArray(parsed.entities) ? parsed.entities : [];
+    const is_vs_pattern = Boolean(parsed.is_vs_pattern);
+    const likely_domain = parsed.likely_domain || "autre";
+
+    return { entities, is_vs_pattern, likely_domain };
+  } catch (e) {
+    log("Exception router/NER:", e);
+    return null;
+  }
+}
+
 // ================== SERPAPI SEARCH (WEB) ==================
 
 async function serpSearch(query) {
@@ -299,8 +383,6 @@ async function serpSearch(query) {
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
 // Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
-// Objectif : garder les bons résultats (comme sur Gane vs Aspinall)
-// au lieu de tout rejeter pour un détail.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
@@ -323,7 +405,6 @@ function scoreWebResult(question, result, currentYear) {
       score += 2;
     }
   }
-  // Si aucun mot clé en commun, légère pénalité (mais pas -4)
   if (overlap === 0) score -= 2;
 
   const qIsPrice = isPriceQuestion(question);
@@ -346,9 +427,9 @@ function scoreWebResult(question, result, currentYear) {
     score += 3;
   }
 
-  // Sport : on ne pénalise plus, on ne fait que récompenser quand ça colle vraiment.
+  // Sport
   const questionIsSports =
-    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score|gane|aspinall|mbappe|mbappé|messi|ronaldo/.test(
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score/.test(
       qNorm
     );
   const textIsSports =
@@ -359,7 +440,7 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Politique / lois : bonus léger quand question et texte sont sur ce thème.
+  // Politique / lois
   const questionIsPolitics =
     /élection|election|politique|présidentielle|gouvernement|loi|lois|décret|decret|parlement|assemblée nationale|assemblee nationale|sénat|senat/.test(
       qNorm
@@ -372,7 +453,7 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Immobilier : bonus léger quand ça colle vraiment.
+  // Immobilier
   const questionIsRealEstate =
     /immobilier|loyer|appartement|maison|m2|mètre carré|metre carre|achat maison|achat appartement/.test(
       qNorm
@@ -385,7 +466,7 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Divertissement (films, séries, etc.) : bonus léger si question ET texte
+  // Divertissement
   const questionIsEntertainment =
     /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga|netflix|cinema|cinéma/.test(
       qNorm
@@ -398,7 +479,7 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Années : bonus si récent, petite pénalité si trop futuriste.
+  // Années
   const years = text.match(/20\d{2}/g) || [];
   for (const yStr of years) {
     const y = parseInt(yStr, 10);
@@ -406,7 +487,7 @@ function scoreWebResult(question, result, currentYear) {
     if (y === currentYear || y === currentYear - 1) score += 1;
   }
 
-  // Légers bonus sources fiables
+  // Sources fiables
   if (
     /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
       text
@@ -430,8 +511,6 @@ function filterWebResults(question, results, currentYear) {
 
   const bestScore = scored[0]?.score ?? -999;
 
-  // Nouveau : seuil beaucoup plus souple.
-  // Si vraiment tout est très mauvais (< 0), on considère qu'on n'a rien d'utilisable.
   if (bestScore < 0) {
     log(
       "Filtrage: meilleur score < 0, aucun résultat retenu",
@@ -443,16 +522,12 @@ function filterWebResults(question, results, currentYear) {
     return [];
   }
 
-  // On garde tous les résultats dont le score est proche du meilleur
-  // et au moins >= 0 (pour éviter les gros hors sujet).
   const threshold = Math.max(bestScore - 3, 0);
 
   let filtered = scored
     .filter(s => s.score >= threshold)
     .map(s => s.result);
 
-  // Sécurité : si pour une raison ou une autre on a tout filtré,
-  // on garde au moins le meilleur résultat brut.
   if (filtered.length === 0 && scored.length > 0) {
     filtered = [scored[0].result];
     log(
@@ -484,7 +559,7 @@ DATE ACTUELLE
 - Nous sommes le ${currentDate}.
 - C'est la date exacte du jour. Tu ne la contredis jamais.
 - Quand l'utilisateur parle de "maintenant", "actuellement", "en ce moment",
-  tu te bases sur cette date et pas sur 2023.
+  tu te bases sur cette date et pas sur une ancienne date interne.
 
 FUTUR
 - Tu ne prédis jamais le futur par toi-même.
@@ -536,7 +611,7 @@ PRIX / CHIFFRES
 - Tu ne devines jamais un prix ou un chiffre précis.
 - Tu t'appuies sur les résultats web quand ils existent.
 - Si les sources donnent plusieurs valeurs, tu peux donner une fourchette et préciser que cela peut varier.
-- Si tu utilises une info datée (ex: prix trouvé en 2023), tu le dis clairement.
+- Si tu utilises une info datée, tu le dis clairement.
 - Si tu n'as pas de données fiables, tu dis que tu n'as pas de prix à jour.
 
 MEMOIRE COURTE / CONTEXTE
@@ -590,7 +665,12 @@ app.post("/chat", async (req, res) => {
     const historyForIp = historyByIp[userIp] || [];
 
     diag.push("Diagnostic TDIA :");
-    diag.push(`- OpenAI MODEL: ${process.env.MODEL || "non défini"}`);
+    diag.push(`- OpenAI MODEL (principal): ${process.env.MODEL || "gpt-5.1"}`);
+    diag.push(
+      `- CLASSIFIER_MODEL: ${
+        process.env.CLASSIFIER_MODEL || "gpt-5-mini"
+      }`
+    );
     diag.push(
       `- OPENAI_API_KEY: ${
         process.env.OPENAI_API_KEY ? "présente" : "absente"
@@ -666,7 +746,7 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
-  // Nouveau : classifieur IA général
+  // Classifieur IA général
   let aiClass = await classifyQuestionWithAI(effectiveQuestion);
   if (aiClass) {
     log(
@@ -687,17 +767,49 @@ app.post("/chat", async (req, res) => {
   const volatileFromAI =
     aiClass && (aiClass.volatility === "high" || aiClass.volatility === "medium");
 
-  const finalVolatile = volatileRegex || volatileFromAI;
+  // Router + NER : détection pattern "X vs Y", domaine sport, etc.
+  const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
+  let isVsSportsQuery = false;
+  let vsEntities = [];
 
+  if (nerInfo) {
+    isVsSportsQuery =
+      nerInfo.is_vs_pattern && nerInfo.likely_domain === "sport";
+    vsEntities = Array.isArray(nerInfo.entities) ? nerInfo.entities : [];
+    log(
+      "Router/NER -> is_vs_pattern:",
+      nerInfo.is_vs_pattern,
+      "| likely_domain:",
+      nerInfo.likely_domain,
+      "| entities:",
+      vsEntities.map(e => e.text).join(" | ")
+    );
+  } else {
+    log("Router/NER indisponible ou JSON invalide");
+  }
+
+  const finalVolatile = volatileRegex || volatileFromAI || isVsSportsQuery;
+
+  // Force recherche si : besoin web, regex, ou pattern X vs Y sportif
   const forceSearch =
-    !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb);
+    !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb || isVsSportsQuery);
 
   let usedSearch = false;
 
   if (forceSearch) {
     try {
       log("Web search triggered for question:", effectiveQuestion);
-      const query = `${effectiveQuestion} ${currentYear}`;
+
+      // Si on a détecté un pattern "X vs Y" sportif, on construit une requête propre
+      let query;
+      if (isVsSportsQuery && vsEntities.length >= 2) {
+        const e1 = vsEntities[0].text;
+        const e2 = vsEntities[1].text;
+        query = `${e1} vs ${e2} resultat`;
+      } else {
+        query = `${effectiveQuestion} ${currentYear}`;
+      }
+
       const results = await serpSearch(query);
       const filtered = filterWebResults(
         effectiveQuestion,
