@@ -117,6 +117,15 @@ function isGenericCurrentAffairQuestion(question) {
     return true;
   }
 
+  // Formulations "dernier ..." très typiques d'actu (option bonus)
+  if (
+    /dernier combat|dernier match|dernier fight|dernier ufc|dernier gala|dernier gp|dernier grand prix|dernier album|dernier single|dernier son|dernier clip|derniere saison|dernière saison|dernier episode|dernier épisode|dernier ep|dernier tome|dernier chapitre/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+
   // Météo
   if (
     /meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(
@@ -790,9 +799,21 @@ app.post("/chat", async (req, res) => {
 
   const finalVolatile = volatileRegex || volatileFromAI || isVsSportsQuery;
 
-  // Force recherche si : besoin web, regex, ou pattern X vs Y sportif
+  // Fix général + option bonus :
+  // On déclenche la recherche web si :
+  // - la question n'est pas purement futuriste
+  // - ET que :
+  //   * le classifieur dit needs_web = true
+  //   * OU que la volatilité IA est high/medium
+  //   * OU que nos regex d'actu/volatilité sentent l'actualité
+  //   * OU qu'on a un pattern "X vs Y" sportif (dernier combat, etc.)
   const forceSearch =
-    !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb || isVsSportsQuery);
+    !isFutureQuestion &&
+    (needsWebFromAI ||
+      volatileFromAI ||
+      volatileRegex ||
+      regexSuggestsWeb ||
+      isVsSportsQuery);
 
   let usedSearch = false;
 
