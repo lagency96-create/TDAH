@@ -1,3 +1,5 @@
+// server.js - TDIA avec gpt-5.1 (principal) + gpt-5-mini (classifieur) + SerpAPI
+
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -98,22 +100,38 @@ function isGenericCurrentAffairQuestion(question) {
   const q = normalizeText(question);
 
   // Politique / événements
-  if (/election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(q)) {
+  if (
+    /election|élection|gouvernement|crise|manifestation|conflit|guerre|sondage|referendum|référendum|coalition|remaniement/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Résultats, scores, matchs récents
-  if (/resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(q)) {
+  if (
+    /resultat|résultat|score|qui a gagne|qui a gagné|classement|match d hier|match hier|score final|score du match/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Météo
-  if (/meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(q)) {
+  if (
+    /meteo|météo|temperature aujourd hui|température aujourd hui|temps aujourd hui|temps en ce moment|meteo demain|météo demain/.test(
+      q
+    )
+  ) {
     return true;
   }
 
   // Statistiques économiques / chiffres récents
-  if (/taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(q)) {
+  if (
+    /taux d inflation|inflation|taux de chomage|taux de chômage|pib|croissance economique|croissance économique|statistiques 20\d{2}/.test(
+      q
+    )
+  ) {
     return true;
   }
 
@@ -132,7 +150,11 @@ function isVolatileTopic(question) {
 
   // Mention explicite de dates récentes ou contexte temps réel
   if (/202[3-9]|203\d/.test(q)) return true;
-  if (/aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(q)) {
+  if (
+    /aujourd'hui|aujourdhui|hier|cette semaine|semaine derniere|semaine dernière|ce mois ci|ce mois-ci|en ce moment|actuellement|dernierement|dernièrement/.test(
+      q
+    )
+  ) {
     return true;
   }
 
@@ -142,7 +164,7 @@ function isVolatileTopic(question) {
 // ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
 
 async function classifyQuestionWithAI(question) {
-  // Micro décisions avec GPT-5 mini en priorité
+  // micro-décisions avec gpt-5-mini par défaut
   const openAiModel =
     process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
 
@@ -183,8 +205,9 @@ Jamais d'autre texte que ce JSON.
 
   const body = {
     model: openAiModel,
+    // temperature est accepté, on le laisse à 0 pour un classifieur stable
     temperature: 0,
-    max_tokens: 120,
+    max_completion_tokens: 120,
     messages: [
       { role: "system", content: promptSystem },
       {
@@ -307,13 +330,19 @@ function scoreWebResult(question, result, currentYear) {
   const qIsProd = isProductOrServiceQuestion(question);
   const qIsPerson = isPersonInRoleQuestion(question);
 
-  if (qIsProd && /amazon|prime|netflix|spotify|iphone|ps5|xbox|pneu|pneus/.test(text)) {
+  if (
+    qIsProd &&
+    /amazon|prime|netflix|spotify|iphone|ps5|xbox|pneu|pneus/.test(text)
+  ) {
     score += 4;
   }
   if (qIsPrice && /prix|tarif|abonnement|subscription|€/i.test(text)) {
     score += 3;
   }
-  if (qIsPerson && /president|président|pdg|ceo|premier ministre/i.test(text)) {
+  if (
+    qIsPerson &&
+    /president|président|pdg|ceo|premier ministre/i.test(text)
+  ) {
     score += 3;
   }
 
@@ -378,7 +407,11 @@ function scoreWebResult(question, result, currentYear) {
   }
 
   // Légers bonus sources fiables
-  if (/wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(text)) {
+  if (
+    /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
+      text
+    )
+  ) {
     score += 2;
   }
 
@@ -462,7 +495,9 @@ FUTUR
 SUJETS VOLATILS
 - Le serveur peut te signaler si le sujet semble dépendre de données qui évoluent vite
   (prix, lois récentes, élections, météo, résultats de match, chiffres économiques).
-- Indication reçue pour cette question: sujet volatil = ${isVolatile ? "oui" : "non"}.
+- Indication reçue pour cette question: sujet volatil = ${
+    isVolatile ? "oui" : "non"
+  }.
 - Si le sujet est volatil et que tu n'as pas de résultats web fiables, tu expliques clairement
   les limites de tes connaissances et tu invites l'utilisateur à vérifier sur une source officielle.
 
@@ -556,9 +591,17 @@ app.post("/chat", async (req, res) => {
 
     diag.push("Diagnostic TDIA :");
     diag.push(`- OpenAI MODEL: ${process.env.MODEL || "non défini"}`);
-    diag.push(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "présente" : "absente"}`);
-    diag.push(`- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`);
-    diag.push(`- Messages d'historique pour cette IP: ${historyForIp.length}`);
+    diag.push(
+      `- OPENAI_API_KEY: ${
+        process.env.OPENAI_API_KEY ? "présente" : "absente"
+      }`
+    );
+    diag.push(
+      `- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`
+    );
+    diag.push(
+      `- Messages d'historique pour cette IP: ${historyForIp.length}`
+    );
 
     try {
       if (process.env.SERP_API_KEY) {
@@ -650,14 +693,17 @@ app.post("/chat", async (req, res) => {
     !isFutureQuestion && (needsWebFromAI || regexSuggestsWeb);
 
   let usedSearch = false;
-  let lastScoredInfo = null; // pour debug si besoin
 
   if (forceSearch) {
     try {
       log("Web search triggered for question:", effectiveQuestion);
       const query = `${effectiveQuestion} ${currentYear}`;
       const results = await serpSearch(query);
-      const filtered = filterWebResults(effectiveQuestion, results || [], currentYear);
+      const filtered = filterWebResults(
+        effectiveQuestion,
+        results || [],
+        currentYear
+      );
 
       if (results && results.length > 0 && filtered.length === 0) {
         log(
@@ -671,7 +717,9 @@ app.post("/chat", async (req, res) => {
         usedSearch = true;
         const summary = filtered
           .slice(0, 3)
-          .map(r => `• ${r.title}\n  ${r.description}\n  (${r.url})`)
+          .map(
+            r => `• ${r.title}\n  ${r.description}\n  (${r.url})`
+          )
           .join("\n\n");
 
         finalUserMessage = `
@@ -687,14 +735,16 @@ En te basant en priorité sur ces informations RÉCENTES ET PERTINENTES :
 - Si les sources sont incertaines ou partielles, dis-le.
 `;
       } else {
-        log("Aucun résultat web fiable après filtrage, on demande au modèle de ne pas inventer");
+        log(
+          "Aucun résultat web fiable après filtrage, on demande au modèle de ne pas inventer"
+        );
         finalUserMessage = `
 La question de l'utilisateur est :
 "${effectiveQuestion}"
 
 Aucune information web vraiment pertinente ou fiable n'a été trouvée.
 Tu ne dois pas inventer de faits, de chiffres ou d'événements récents.
-Explique simplement que tu n'as pas de information fiable à jour sur ce point,
+Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
 et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
 `;
       }
@@ -704,7 +754,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    // Modèle principal de chat: GPT-5.1
+    // Modèle principal de chat: gpt-5.1
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
@@ -742,7 +792,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
         model: openAiModel,
         temperature: 0.35,
         messages: messagesForOpenAi,
-        max_tokens: 700
+        max_completion_tokens: 700
       })
     });
 
@@ -754,7 +804,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
 
     const j = await r.json();
     const answer =
-      j.choices?.[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
+      j.choices?.[0]?.message?.content ||
+      "Désolé, je n'ai pas pu générer de réponse.";
 
     // Mise à jour de la dernière vraie question
     if (!isFollowUp) {
@@ -779,7 +830,9 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     });
   } catch (e) {
     log("Erreur serveur:", e);
-    return res.status(500).json({ error: "server_error", detail: String(e) });
+    return res
+      .status(500)
+      .json({ error: "server_error", detail: String(e) });
   }
 });
 
@@ -838,7 +891,8 @@ Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
 
 // response = { reply, usedSearch, volatile, modeLabel, domain, country }
 
-document.getElementById("tdia-mode-label").textContent = response.modeLabel || "TDIA réfléchis";
+document.getElementById("tdia-mode-label").textContent =
+  response.modeLabel || "TDIA réfléchis";
 
 const barContainer = document.getElementById("tdia-bar-container");
 if (response.modeLabel === "recherche approfondie") {
