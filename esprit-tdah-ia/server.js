@@ -142,7 +142,9 @@ function isVolatileTopic(question) {
 // ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
 
 async function classifyQuestionWithAI(question) {
-  const openAiModel = process.env.MODEL || "gpt-4o";
+  // Micro décisions avec GPT-5 mini en priorité
+  const openAiModel =
+    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
 
   const promptSystem = `
 Tu es un classifieur pour TDIA.
@@ -467,7 +469,7 @@ SUJETS VOLATILS
 SPORT / RÉSULTATS / SCORES
 - Si la question concerne clairement un match, un combat, un résultat sportif ("qui a gagné", "ça a donné quoi",
   "score", "résultat", noms de sportifs ou de clubs associés à un événement récent),
-  tu considères que c'est un sujet très volatile.
+  tu considères que c'est un sujet très volatil.
 - Si le serveur t'a envoyé des résultats web, tu te bases en priorité sur ces résultats récents
   et tu ignores tes anciennes connaissances si elles sont différentes.
 - Si les résultats web manquent ou sont flous, tu expliques que tu n'as pas les infos exactes
@@ -692,7 +694,7 @@ La question de l'utilisateur est :
 
 Aucune information web vraiment pertinente ou fiable n'a été trouvée.
 Tu ne dois pas inventer de faits, de chiffres ou d'événements récents.
-Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
+Explique simplement que tu n'as pas de information fiable à jour sur ce point,
 et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
 `;
       }
@@ -702,7 +704,8 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    const openAiModel = process.env.MODEL || "gpt-4o"; // tout passe par ce modèle
+    // Modèle principal de chat: GPT-5.1
+    const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
     // Récupérer l'historique court pour cette IP (mémoire courte)
