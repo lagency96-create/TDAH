@@ -776,6 +776,20 @@ app.post("/chat", async (req, res) => {
   const volatileFromAI =
     aiClass && (aiClass.volatility === "high" || aiClass.volatility === "medium");
 
+  // Liste des domaines considérés VOLATILES PAR NATURE
+  const highVolatileDomains = [
+    "sport",
+    "prix_abonnement",
+    "produit_tech",
+    "lois_politique",
+    "finance",
+    "actualite_generale",
+    "culture"
+  ];
+
+  const domainIsHighVolatile =
+    aiClass && highVolatileDomains.includes(aiClass.domain);
+
   // Router + NER : détection pattern "X vs Y", domaine sport, etc.
   const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
   let isVsSportsQuery = false;
@@ -797,22 +811,25 @@ app.post("/chat", async (req, res) => {
     log("Router/NER indisponible ou JSON invalide");
   }
 
-  const finalVolatile = volatileRegex || volatileFromAI || isVsSportsQuery;
+  const finalVolatile =
+    volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Fix général + option bonus :
+  // Fix général + domaines volatiles :
   // On déclenche la recherche web si :
   // - la question n'est pas purement futuriste
   // - ET que :
   //   * le classifieur dit needs_web = true
   //   * OU que la volatilité IA est high/medium
   //   * OU que nos regex d'actu/volatilité sentent l'actualité
-  //   * OU qu'on a un pattern "X vs Y" sportif (dernier combat, etc.)
+  //   * OU que le domaine IA est sport / prix / lois / finance / actu / culture
+  //   * OU qu'on a un pattern "X vs Y" sportif
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
       volatileFromAI ||
       volatileRegex ||
       regexSuggestsWeb ||
+      domainIsHighVolatile ||
       isVsSportsQuery);
 
   let usedSearch = false;
