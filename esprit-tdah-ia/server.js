@@ -61,7 +61,7 @@ function isPriceQuestion(question) {
 
 function isProductOrServiceQuestion(question) {
   const q = normalizeText(question);
-  return /amazon|prime|netflix|spotify|disney\+|disney plus|iphone|samsung|android|macbook|pc gamer|voiture|pneu|pneus|ordinateur|console|ps5|xbox|apple tv|canal\+|canal plus/i.test(
+  return /amazon|prime\b|netflix|spotify|disney\+|disney plus|iphone|samsung|android|macbook|pc gamer|voiture|pneu|pneus|ordinateur|console|ps5|xbox|apple tv|canal\+|canal plus/i.test(
     q
   );
 }
@@ -250,7 +250,7 @@ Jamais d'autre texte que ce JSON.
 
   const body = {
     model: openAiModel,
-    temperature: 0.2,
+    // pas de temperature personnalisée -> on laisse la valeur par défaut
     max_completion_tokens: 120,
     messages: [
       { role: "system", content: promptSystem },
@@ -339,7 +339,7 @@ Règles :
 
   const body = {
     model: routerModel,
-    temperature: 0.2,
+    // pas de temperature personnalisée ici non plus
     max_completion_tokens: 160,
     messages: [
       { role: "system", content: promptSystem },
@@ -388,9 +388,255 @@ Règles :
   }
 }
 
+// ================== ROUTEUR LOCAL / INTERNATIONAL + RÉÉCRITURE REQUÊTE ==================
+
+// Détection locale/internationale + choix langue / hl / gl pour SerpAPI
+function detectSearchLocale(question, aiClass) {
+  const q = normalizeText(question);
+
+  let lang = "fr";
+  let hl = "fr";
+  let gl = "fr";
+  let targetCountry = (aiClass && aiClass.country) || "france";
+
+  // Pays explicites dans la question
+  if (/etats unis|états unis|\busa\b|\bus\b|amerique|amérique/.test(q)) {
+    targetCountry = "usa";
+  } else if (/royaume uni|angleterre|\buk\b|grande bretagne|grande-bretagne/.test(q)) {
+    targetCountry = "uk";
+  } else if (/canada/.test(q)) {
+    targetCountry = "canada";
+  } else if (/suisse/.test(q)) {
+    targetCountry = "suisse";
+  } else if (/belgique/.test(q)) {
+    targetCountry = "belgique";
+  } else if (/espagne|spain/.test(q)) {
+    targetCountry = "espagne";
+  } else if (/allemagne|germany/.test(q)) {
+    targetCountry = "allemagne";
+  } else if (/turquie|turkey/.test(q)) {
+    targetCountry = "turquie";
+  } else if (/italie|italy/.test(q)) {
+    targetCountry = "italie";
+  } else if (/maroc|algerie|algérie|tunisie/.test(q)) {
+    targetCountry = "maghreb";
+  }
+
+  // Global brands / plateformes internationales
+  const isGlobalBrand = /youtube|netflix|amazon|prime video|primevideo|spotify|instagram|tiktok|disney\+|disney plus|apple|samsung|tesla|facebook|meta/.test(
+    q
+  );
+
+  // Sport international typique (UFC, NBA, F1...)
+  const isUfcLike =
+    /ufc|bellator|pfl|one championship|one fc/.test(q);
+  const isGlobalLeague =
+    /nba|nfl|mlb|nhl|premier league|champions league|formula 1|formule 1|f1|grand prix|gp/.test(
+      q
+    );
+
+  // Sport FR typique
+  const isFrenchLeagueSport =
+    /ligue 1|ligue1|ligue 2|ligue2|psg|paris saint germain|ol lyon|olympique lyonnais|om|olympique de marseille|coupe de france/.test(
+      q
+    );
+
+  // Cas 1 : questions de prix sur des plateformes globales → FR par défaut (France)
+  if (isPriceQuestion(question) && isGlobalBrand && targetCountry === "france") {
+    lang = "fr";
+    hl = "fr";
+    gl = "fr";
+    return { lang, hl, gl, targetCountry };
+  }
+
+  // Cas 2 : sport FR local
+  if (isFrenchLeagueSport) {
+    lang = "fr";
+    hl = "fr";
+    gl = "fr";
+    return { lang, hl, gl, targetCountry: "france" };
+  }
+
+  // Cas 3 : sport vraiment global (UFC, NBA, F1, etc.)
+  if (isUfcLike || isGlobalLeague) {
+    lang = "en";
+    hl = "en";
+    gl = "us";
+    return { lang, hl, gl, targetCountry: "usa" };
+  }
+
+  // Cas 4 : si le classifieur a détecté un autre pays que la France
+  if (targetCountry !== "france") {
+    switch (targetCountry) {
+      case "usa":
+        lang = "en";
+        hl = "en";
+        gl = "us";
+        break;
+      case "uk":
+        lang = "en";
+        hl = "en";
+        gl = "gb";
+        break;
+      case "canada":
+        lang = "en";
+        hl = "en";
+        gl = "ca";
+        break;
+      case "suisse":
+      case "belgique":
+      case "espagne":
+      case "allemagne":
+      case "turquie":
+      case "italie":
+      case "maghreb":
+        // Pour ces cas-là on reste simple : FR, mais on pourrait raffiner plus tard
+        lang = "fr";
+        hl = "fr";
+        gl = "fr";
+        break;
+      default:
+        lang = "fr";
+        hl = "fr";
+        gl = "fr";
+        break;
+    }
+    return { lang, hl, gl, targetCountry };
+  }
+
+  // Cas 5 : domaine global (tech, finance, actualité générale) sans pays explicite
+  const domain = aiClass ? aiClass.domain : null;
+  const globallyOrientedDomains = [
+    "produit_tech",
+    "finance",
+    "culture",
+    "actualite_generale"
+  ];
+
+  if (domain && globallyOrientedDomains.includes(domain) && !/france/.test(q)) {
+    lang = "en";
+    hl = "en";
+    gl = "us";
+    return { lang, hl, gl, targetCountry: "usa" };
+  }
+
+  // Par défaut : France, FR
+  lang = "fr";
+  hl = "fr";
+  gl = "fr";
+  return { lang, hl, gl, targetCountry: "france" };
+}
+
+// Réécriture intelligente de la requête façon "requête Google propre"
+async function rewriteSearchQuery(question, aiClass, nerInfo, currentYear, locale) {
+  const lang = locale.lang || "fr";
+  const q = String(question || "").trim();
+
+  // Cas spécial : pattern "X vs Y" sportif détecté par le NER
+  if (
+    nerInfo &&
+    nerInfo.is_vs_pattern &&
+    nerInfo.likely_domain === "sport" &&
+    Array.isArray(nerInfo.entities) &&
+    nerInfo.entities.length >= 2
+  ) {
+    const e1 = nerInfo.entities[0].text;
+    const e2 = nerInfo.entities[1].text;
+
+    if (lang === "en") {
+      return `${e1} vs ${e2} result ${currentYear}`;
+    } else {
+      return `résultat ${e1} vs ${e2} ${currentYear}`;
+    }
+  }
+
+  // Petite IA pour reformuler la question en requête Google clean
+  const model = process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
+
+  const examplesEn = `
+Exemples (EN) :
+Question: "When did Islam Makhachev fight last time?"
+Requête: "Islam Makhachev last fight date result ${currentYear}"
+
+Question: "How much is Amazon Prime per month in France?"
+Requête: "Amazon Prime price per month France ${currentYear}"
+
+Question: "Who is the current president of Turkey?"
+Requête: "current president of Turkey ${currentYear}"
+`;
+
+  const examplesFr = `
+Exemples (FR) :
+Question: "C'est quand que Makachev a combattu la dernière fois ?"
+Requête: "Islam Makhachev dernier combat date résultat ${currentYear}"
+
+Question: "Combien coûte Amazon Prime en France ?"
+Requête: "prix abonnement Amazon Prime France par mois ${currentYear}"
+
+Question: "Qui est le président de la Turquie actuellement ?"
+Requête: "président Turquie actuel ${currentYear}"
+`;
+
+  const promptSystem = `
+Tu transformes une question utilisateur en REQUÊTE DE RECHERCHE GOOGLE très claire.
+
+Langue de la requête : "${lang}".
+
+Règles :
+- Tu gardes le sujet principal (personnes, produit, service, événement, pays).
+- Tu retires les mots inutiles ("stp", "tu peux me dire", etc.).
+- Si la question concerne quelque chose d'actuel (prix, résultat, poste politique, dernier combat, etc.),
+  tu ajoutes l'année ${currentYear} à la requête.
+- Tu renvoies UNIQUEMENT la requête finale, sans guillemets, sans phrases complètes.
+
+${lang === "en" ? examplesEn : examplesFr}
+`;
+
+  const body = {
+    model,
+    max_completion_tokens: 40,
+    messages: [
+      { role: "system", content: promptSystem },
+      {
+        role: "user",
+        content: `Question utilisateur : "${q}"\nDonne uniquement la requête de recherche, rien d'autre.`
+      }
+    ]
+  };
+
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const txt = await r.text();
+      log("Erreur rewriteSearchQuery IA:", r.status, txt);
+      // Fallback simple
+      return `${q} ${currentYear}`;
+    }
+
+    const j = await r.json();
+    const raw = j.choices?.[0]?.message?.content || "";
+    const cleaned = raw.trim().replace(/^["']|["']$/g, "");
+    if (!cleaned) {
+      return `${q} ${currentYear}`;
+    }
+    return cleaned;
+  } catch (e) {
+    log("Exception rewriteSearchQuery IA:", e);
+    return `${q} ${currentYear}`;
+  }
+}
+
 // ================== SERPAPI SEARCH (WEB) ==================
 
-async function serpSearch(query) {
+async function serpSearch(query, hl = "fr", gl = "fr") {
   const apiKey = process.env.SERP_API_KEY;
   if (!apiKey) {
     log("SerpAPI key manquante (SERP_API_KEY)");
@@ -399,7 +645,7 @@ async function serpSearch(query) {
 
   const url = `https://serpapi.com/search.json?q=${encodeURIComponent(
     query
-  )}&engine=google&hl=fr&num=5&api_key=${apiKey}`;
+  )}&engine=google&hl=${hl}&gl=${gl}&num=5&api_key=${apiKey}`;
 
   log("SerpAPI request:", url);
 
@@ -691,29 +937,6 @@ OBJECTIF
 `;
 }
 
-// ================== FONCTION POUR LA REQUÊTE DE FALLBACK (2ème recherche) ==================
-
-function buildFallbackQuery(question, nerInfo) {
-  const keywords = extractKeywords(question);
-  let base = keywords.join(" ");
-
-  // Limiter un peu la longueur de la query
-  if (base.length > 160) {
-    base = base.slice(0, 160);
-  }
-
-  if (nerInfo && Array.isArray(nerInfo.entities) && nerInfo.entities.length > 0) {
-    const entityNames = nerInfo.entities.map(e => e.text).join(" ");
-    const combined = `${entityNames} ${base}`.trim();
-    if (combined.length > 0) {
-      return combined;
-    }
-  }
-
-  // Fallback sur la question brute si on n'a rien
-  return base || String(question || "");
-}
-
 // ================== ROUTE /chat ==================
 
 app.post("/chat", async (req, res) => {
@@ -753,7 +976,7 @@ app.post("/chat", async (req, res) => {
 
     try {
       if (process.env.SERP_API_KEY) {
-        const testResults = await serpSearch("test google actualité");
+        const testResults = await serpSearch("test google actualité", "fr", "fr");
         diag.push(
           `- Test SerpAPI: ${
             testResults && testResults.length > 0
@@ -811,7 +1034,7 @@ app.post("/chat", async (req, res) => {
     isRecentLawOrPoliticsQuestion(effectiveQuestion) ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
     isSportsLikeQuestion(effectiveQuestion) ||
-    /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
+    /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|2026|mise à jour|maj|update/.test(
       qNorm
     );
 
@@ -890,49 +1113,34 @@ app.post("/chat", async (req, res) => {
     try {
       log("Web search triggered for question:", effectiveQuestion);
 
-      // Plan A: première requête
-      let query;
-      if (isVsSportsQuery && vsEntities.length >= 2) {
-        const e1 = vsEntities[0].text;
-        const e2 = vsEntities[1].text;
-        query = `${e1} vs ${e2} resultat`;
-      } else {
-        query = `${effectiveQuestion} ${currentYear}`;
-      }
+      // Choix locale/langue (FR/local vs EN/US etc.)
+      const locale = detectSearchLocale(effectiveQuestion, aiClass);
+      // Réécriture intelligente de la requête
+      const query = await rewriteSearchQuery(
+        effectiveQuestion,
+        aiClass,
+        nerInfo,
+        currentYear,
+        locale
+      );
 
-      let results = await serpSearch(query);
-      let filtered = filterWebResults(
+      log(
+        "Final web query:",
+        query,
+        "| lang:",
+        locale.lang,
+        "| hl:",
+        locale.hl,
+        "| gl:",
+        locale.gl
+      );
+
+      const results = await serpSearch(query, locale.hl, locale.gl);
+      const filtered = filterWebResults(
         effectiveQuestion,
         results || [],
         currentYear
       );
-
-      // Si la première requête ne donne rien d'utilisable, on tente un fallback (Plan B)
-      if (
-        (!results || results.length === 0 || filtered.length === 0) &&
-        !isFutureQuestion
-      ) {
-        const fallbackQuery = buildFallbackQuery(effectiveQuestion, nerInfo);
-        log("Fallback web search triggered with query:", fallbackQuery);
-
-        const fbResults = await serpSearch(fallbackQuery);
-        const fbFiltered = filterWebResults(
-          effectiveQuestion,
-          fbResults || [],
-          currentYear
-        );
-
-        if (fbResults && fbResults.length > 0 && fbFiltered.length > 0) {
-          results = fbResults;
-          filtered = fbFiltered;
-        } else if (fbResults && fbResults.length > 0 && fbFiltered.length === 0) {
-          log(
-            "WARNING: fallback recherche web déclenchée, résultats SerpAPI présents mais tous filtrés",
-            "| question:",
-            effectiveQuestion
-          );
-        }
-      }
 
       if (results && results.length > 0 && filtered.length === 0) {
         log(
@@ -965,13 +1173,13 @@ En te basant en priorité sur ces informations RÉCENTES ET PERTINENTES :
 `;
       } else {
         log(
-          "Aucun résultat web fiable après filtrage (Plan A + fallback), on demande au modèle de ne pas inventer"
+          "Aucun résultat web fiable après filtrage, on demande au modèle de ne pas inventer"
         );
         finalUserMessage = `
 La question de l'utilisateur est :
 "${effectiveQuestion}"
 
-Aucune information web vraiment pertinente ou fiable n'a été trouvée, même après une deuxième tentative de recherche.
+Aucune information web vraiment pertinente ou fiable n'a été trouvée.
 Tu ne dois pas inventer de faits, de chiffres ou d'événements récents.
 Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
 et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
