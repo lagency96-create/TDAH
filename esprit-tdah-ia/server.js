@@ -427,40 +427,6 @@ async function serpSearch(query) {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
-// Domains "officiels" à privilégier pour les PRIX / ABONNEMENTS
-const trustedPriceDomains = [
-  "youtube.com",
-  "about.youtube.com",
-  "about.google",
-  "support.google.com",
-  "google.com",
-  "netflix.com",
-  "spotify.com",
-  "disneyplus.com",
-  "amazon.",
-  "primevideo.com",
-  "canalplus.com",
-  "canalplus.fr",
-  "canalplus-afrique.com",
-  "apple.com",
-  "tv.apple.com",
-  "playstation.com",
-  "xbox.com"
-];
-
-function filterTrustedPriceResults(results) {
-  if (!results || results.length === 0) return [];
-  return results.filter(r => {
-    if (!r.url) return false;
-    try {
-      const host = new URL(r.url).hostname.toLowerCase();
-      return trustedPriceDomains.some(d => host.includes(d));
-    } catch {
-      return false;
-    }
-  });
-}
-
 // Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
@@ -566,7 +532,7 @@ function scoreWebResult(question, result, currentYear) {
     if (y === currentYear || y === currentYear - 1) score += 1;
   }
 
-  // Sources fiables (général)
+  // Sources fiables
   if (
     /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
       text
@@ -687,12 +653,11 @@ RÉSULTATS WEB
 - Si aucune info fiable n'existe, tu dis que tu ne sais pas, plutôt que d'inventer.
 
 PRIX / CHIFFRES
-- Pour les PRIX, ABONNEMENTS et TARIFS, tu ignores tes connaissances internes et tu t'appuies uniquement sur les résultats web filtrés.
-- Tu privilégies toujours les sources officielles (site du service, page d'abonnement, documentation officielle).
-- Tu ne dis jamais "environ", "autour de", "dans ces eaux-là", "à vérifier", et tu ne donnes pas de fourchette de prix.
-- Si un prix officiel ressort clairement dans les résultats, tu le redonnes exactement (montant + devise) et tu précises le pays si utile.
-- Si aucun prix officiel n'est clair, tu expliques que tu ne peux pas donner de prix fiable plutôt que d'en inventer un.
-- Pour d'autres chiffres généraux (statistiques, populations, etc.), tu peux donner un ordre de grandeur si les sources ne sont pas parfaitement alignées, en précisant que ce sont des estimations.
+- Tu ne devines jamais un prix ou un chiffre précis.
+- Tu t'appuies sur les résultats web quand ils existent.
+- Si les sources donnent plusieurs valeurs, tu peux donner une fourchette et préciser que cela peut varier.
+- Si tu utilises une info datée, tu le dis clairement.
+- Si tu n'as pas de données fiables, tu dis que tu n'as pas de prix à jour.
 
 MEMOIRE COURTE / CONTEXTE
 - Le serveur peut te transmettre une petite partie récente de la conversation pour que tu restes cohérent.
@@ -724,6 +689,29 @@ OBJECTIF
 - Tu réponds comme une IA généraliste compétente, mais ultra claire, simple
   et digeste pour une personne TDAH.
 `;
+}
+
+// ================== FONCTION POUR LA REQUÊTE DE FALLBACK (2ème recherche) ==================
+
+function buildFallbackQuery(question, nerInfo) {
+  const keywords = extractKeywords(question);
+  let base = keywords.join(" ");
+
+  // Limiter un peu la longueur de la query
+  if (base.length > 160) {
+    base = base.slice(0, 160);
+  }
+
+  if (nerInfo && Array.isArray(nerInfo.entities) && nerInfo.entities.length > 0) {
+    const entityNames = nerInfo.entities.map(e => e.text).join(" ");
+    const combined = `${entityNames} ${base}`.trim();
+    if (combined.length > 0) {
+      return combined;
+    }
+  }
+
+  // Fallback sur la question brute si on n'a rien
+  return base || String(question || "");
 }
 
 // ================== ROUTE /chat ==================
@@ -886,7 +874,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport / prix / actu), on force
+  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport), on force
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -902,7 +890,7 @@ app.post("/chat", async (req, res) => {
     try {
       log("Web search triggered for question:", effectiveQuestion);
 
-      // Si pattern "X vs Y" sportif : query propre
+      // Plan A: première requête
       let query;
       if (isVsSportsQuery && vsEntities.length >= 2) {
         const e1 = vsEntities[0].text;
@@ -912,35 +900,39 @@ app.post("/chat", async (req, res) => {
         query = `${effectiveQuestion} ${currentYear}`;
       }
 
-      const results = await serpSearch(query);
-      let baseResults = results || [];
+      let results = await serpSearch(query);
+      let filtered = filterWebResults(
+        effectiveQuestion,
+        results || [],
+        currentYear
+      );
 
-      // Si question de PRIX / ABONNEMENT : on privilégie les domaines officiels
-      const isPriceLike =
-        isPriceQuestion(effectiveQuestion) ||
-        (aiClass &&
-          (aiClass.domain === "prix_abonnement" ||
-            aiClass.domain === "produit_tech"));
+      // Si la première requête ne donne rien d'utilisable, on tente un fallback (Plan B)
+      if (
+        (!results || results.length === 0 || filtered.length === 0) &&
+        !isFutureQuestion
+      ) {
+        const fallbackQuery = buildFallbackQuery(effectiveQuestion, nerInfo);
+        log("Fallback web search triggered with query:", fallbackQuery);
 
-      if (baseResults.length > 0 && isPriceLike) {
-        const trustedOnly = filterTrustedPriceResults(baseResults);
-        if (trustedOnly.length > 0) {
+        const fbResults = await serpSearch(fallbackQuery);
+        const fbFiltered = filterWebResults(
+          effectiveQuestion,
+          fbResults || [],
+          currentYear
+        );
+
+        if (fbResults && fbResults.length > 0 && fbFiltered.length > 0) {
+          results = fbResults;
+          filtered = fbFiltered;
+        } else if (fbResults && fbResults.length > 0 && fbFiltered.length === 0) {
           log(
-            "Filtrage prix: utilisation EXCLUSIVE des domaines officiels pour cette question."
-          );
-          baseResults = trustedOnly;
-        } else {
-          log(
-            "Filtrage prix: aucun domaine officiel trouvé, on garde les résultats généraux."
+            "WARNING: fallback recherche web déclenchée, résultats SerpAPI présents mais tous filtrés",
+            "| question:",
+            effectiveQuestion
           );
         }
       }
-
-      const filtered = filterWebResults(
-        effectiveQuestion,
-        baseResults,
-        currentYear
-      );
 
       if (results && results.length > 0 && filtered.length === 0) {
         log(
@@ -959,19 +951,6 @@ app.post("/chat", async (req, res) => {
           )
           .join("\n\n");
 
-        let extraInstructions = "";
-
-        // Renforcement PRIX STRICT dans le message utilisateur si question de prix
-        if (isPriceLike) {
-          extraInstructions = `
-IMPORTANT - PRIX / ABONNEMENTS :
-- Tu dois utiliser UNIQUEMENT les montants présents dans ces résultats web.
-- Tu ignores complètement tes anciennes connaissances internes sur les prix.
-- Tu ne dis jamais "environ", "autour de", "à peu près", "ça dépend", ni ne donnes de fourchette.
-- Si un prix officiel pour la France ressort clairement, tu le redonnes EXACTEMENT (montant + devise).
-- Si aucun prix officiel n'est clair, tu expliques que tu ne peux pas donner de prix fiable plutôt que d'en inventer un.`;
-        }
-
         finalUserMessage = `
 Question de l'utilisateur :
 "${effectiveQuestion}"
@@ -982,17 +961,17 @@ ${summary}
 En te basant en priorité sur ces informations RÉCENTES ET PERTINENTES :
 - Donne une réponse claire, structurée et TDAH-friendly.
 - Reste strictement sur le même sujet que la question.
-- Si les sources sont incertaines ou partielles, dis-le.${extraInstructions}
+- Si les sources sont incertaines ou partielles, dis-le.
 `;
       } else {
         log(
-          "Aucun résultat web fiable après filtrage, on demande au modèle de ne pas inventer"
+          "Aucun résultat web fiable après filtrage (Plan A + fallback), on demande au modèle de ne pas inventer"
         );
         finalUserMessage = `
 La question de l'utilisateur est :
 "${effectiveQuestion}"
 
-Aucune information web vraiment pertinente ou fiable n'a été trouvée.
+Aucune information web vraiment pertinente ou fiable n'a été trouvée, même après une deuxième tentative de recherche.
 Tu ne dois pas inventer de faits, de chiffres ou d'événements récents.
 Explique simplement que tu n'as pas d'information fiable à jour sur ce point,
 et propose à l'utilisateur de vérifier sur une source officielle si nécessaire.
