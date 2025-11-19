@@ -117,7 +117,7 @@ function isGenericCurrentAffairQuestion(question) {
     return true;
   }
 
-  // Formulations "dernier ..." très typiques d'actu (option bonus)
+  // Formulations "dernier ..." typiques d'actu
   if (
     /dernier combat|dernier match|dernier fight|dernier ufc|dernier gala|dernier gp|dernier grand prix|dernier album|dernier single|dernier son|dernier clip|derniere saison|dernière saison|dernier episode|dernier épisode|dernier ep|dernier tome|dernier chapitre/.test(
       q
@@ -173,7 +173,6 @@ function isVolatileTopic(question) {
 // ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
 
 async function classifyQuestionWithAI(question) {
-  // micro-décisions avec gpt-5-mini par défaut
   const openAiModel =
     process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
 
@@ -214,7 +213,7 @@ Jamais d'autre texte que ce JSON.
 
   const body = {
     model: openAiModel,
-    temperature: 0,
+    temperature: 0.2,
     max_completion_tokens: 120,
     messages: [
       { role: "system", content: promptSystem },
@@ -241,7 +240,7 @@ Jamais d'autre texte que ce JSON.
     if (!r.ok) {
       const txt = await r.text();
       log("Erreur classifieur IA:", r.status, txt);
-      return null; // fallback regex
+      return null;
     }
 
     const j = await r.json();
@@ -303,7 +302,7 @@ Règles :
 
   const body = {
     model: routerModel,
-    temperature: 0,
+    temperature: 0.2,
     max_completion_tokens: 160,
     messages: [
       { role: "system", content: promptSystem },
@@ -391,7 +390,6 @@ async function serpSearch(query) {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
-// Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
@@ -406,7 +404,7 @@ function scoreWebResult(question, result, currentYear) {
 
   let score = 0;
 
-  // Overlap mots-clés (coeur de la pertinence)
+  // Overlap mots-clés
   let overlap = 0;
   for (const kw of qKeywords) {
     if (kw && text.includes(kw)) {
@@ -776,7 +774,7 @@ app.post("/chat", async (req, res) => {
   const volatileFromAI =
     aiClass && (aiClass.volatility === "high" || aiClass.volatility === "medium");
 
-  // Liste des domaines considérés VOLATILES PAR NATURE
+  // Domaines volatiles par nature
   const highVolatileDomains = [
     "sport",
     "prix_abonnement",
@@ -814,15 +812,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Fix général + domaines volatiles :
-  // On déclenche la recherche web si :
-  // - la question n'est pas purement futuriste
-  // - ET que :
-  //   * le classifieur dit needs_web = true
-  //   * OU que la volatilité IA est high/medium
-  //   * OU que nos regex d'actu/volatilité sentent l'actualité
-  //   * OU que le domaine IA est sport / prix / lois / finance / actu / culture
-  //   * OU qu'on a un pattern "X vs Y" sportif
+  // Déclenchement web
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -838,7 +828,6 @@ app.post("/chat", async (req, res) => {
     try {
       log("Web search triggered for question:", effectiveQuestion);
 
-      // Si on a détecté un pattern "X vs Y" sportif, on construit une requête propre
       let query;
       if (isVsSportsQuery && vsEntities.length >= 2) {
         const e1 = vsEntities[0].text;
@@ -904,13 +893,10 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    // Modèle principal de chat: gpt-5.1
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
-    // Récupérer l'historique court pour cette IP (mémoire courte)
     let history = historyByIp[userIp] || [];
-    // On ne garde que les 6 derniers messages (3 tours)
     const trimmedHistory = history.slice(-6);
 
     const messagesForOpenAi = [
@@ -957,12 +943,10 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       j.choices?.[0]?.message?.content ||
       "Désolé, je n'ai pas pu générer de réponse.";
 
-    // Mise à jour de la dernière vraie question
     if (!isFollowUp) {
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
 
-    // Mise à jour de l'historique court pour cette IP
     history.push({ role: "user", content: finalUserMessage });
     history.push({ role: "assistant", content: answer });
     if (history.length > 12) {
