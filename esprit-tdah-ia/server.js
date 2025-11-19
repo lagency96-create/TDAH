@@ -73,6 +73,32 @@ function isPersonInRoleQuestion(question) {
   );
 }
 
+// Nouveau : détection "ça ressemble à du sport/match/combat"
+function isSportsLikeQuestion(question) {
+  const q = normalizeText(question);
+
+  // Mots-clés typiques du sport / combat
+  if (
+    /ufc|mma|boxe|boxing|kickboxing|judo|jiu jitsu|jiu-jitsu|grappling|foot|football|basket|nba|ligue 1|ligue1|champions league|tennis|formule 1|formula 1|f1|grand prix|gp|match|combat|combattu|combattre|fight|ko|tko|round/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+
+  // Pattern X vs Y ou X contre Y → très souvent du sport / duel
+  if (/\bvs\b|\bversus\b| contre /.test(q)) {
+    return true;
+  }
+
+  // Formulations "a affronté", "a joué contre"
+  if (/a affronte|a affronté|a joue contre|a joué contre/.test(q)) {
+    return true;
+  }
+
+  return false;
+}
+
 function isDiagnosticMessage(message) {
   const m = normalizeText(message.trim());
   return m === "diagnostic" || m === "diagnostic tdia";
@@ -117,9 +143,18 @@ function isGenericCurrentAffairQuestion(question) {
     return true;
   }
 
-  // Formulations "dernier ..." typiques d'actu
+  // Formulations "dernier ..." très typiques d'actu (sport, culture, etc.)
   if (
     /dernier combat|dernier match|dernier fight|dernier ufc|dernier gala|dernier gp|dernier grand prix|dernier album|dernier single|dernier son|dernier clip|derniere saison|dernière saison|dernier episode|dernier épisode|dernier ep|dernier tome|dernier chapitre/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+
+  // Variante : "a combattu la dernière fois" / "a joué la dernière fois"
+  if (
+    /(combattu|combat|joue|joué) .*derniere fois|derniere fois .* (combattu|combat|joue|joué)/.test(
       q
     )
   ) {
@@ -156,6 +191,7 @@ function isVolatileTopic(question) {
   if (isPersonInRoleQuestion(question)) return true;
   if (isRecentLawOrPoliticsQuestion(question)) return true;
   if (isGenericCurrentAffairQuestion(question)) return true;
+  if (isSportsLikeQuestion(question)) return true;
 
   // Mention explicite de dates récentes ou contexte temps réel
   if (/202[3-9]|203\d/.test(q)) return true;
@@ -173,6 +209,7 @@ function isVolatileTopic(question) {
 // ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
 
 async function classifyQuestionWithAI(question) {
+  // micro-décisions avec gpt-5-mini par défaut
   const openAiModel =
     process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
 
@@ -240,7 +277,7 @@ Jamais d'autre texte que ce JSON.
     if (!r.ok) {
       const txt = await r.text();
       log("Erreur classifieur IA:", r.status, txt);
-      return null;
+      return null; // fallback regex
     }
 
     const j = await r.json();
@@ -390,6 +427,7 @@ async function serpSearch(query) {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
+// Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
@@ -404,7 +442,7 @@ function scoreWebResult(question, result, currentYear) {
 
   let score = 0;
 
-  // Overlap mots-clés
+  // Overlap mots-clés (coeur de la pertinence)
   let overlap = 0;
   for (const kw of qKeywords) {
     if (kw && text.includes(kw)) {
@@ -436,11 +474,11 @@ function scoreWebResult(question, result, currentYear) {
 
   // Sport
   const questionIsSports =
-    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score/.test(
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score|combat|combattu|fight/.test(
       qNorm
     );
   const textIsSports =
-    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score|but|buts|ko|tko/.test(
+    /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|score|but|buts|ko|tko|combat|fight/.test(
       text
     );
   if (questionIsSports && textIsSports) {
@@ -749,6 +787,7 @@ app.post("/chat", async (req, res) => {
     isPersonInRoleQuestion(effectiveQuestion) ||
     isRecentLawOrPoliticsQuestion(effectiveQuestion) ||
     isGenericCurrentAffairQuestion(effectiveQuestion) ||
+    isSportsLikeQuestion(effectiveQuestion) ||
     /actu|actualité|news|résultat|score|aujourd'hui|aujourdhui|hier|2024|2025|mise à jour|maj|update/.test(
       qNorm
     );
@@ -812,7 +851,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Déclenchement web
+  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport), on force
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -828,6 +867,7 @@ app.post("/chat", async (req, res) => {
     try {
       log("Web search triggered for question:", effectiveQuestion);
 
+      // Si pattern "X vs Y" sportif : query propre
       let query;
       if (isVsSportsQuery && vsEntities.length >= 2) {
         const e1 = vsEntities[0].text;
@@ -893,10 +933,13 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
+    // Modèle principal de chat: gpt-5.1
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
+    // Récupérer l'historique court pour cette IP (mémoire courte)
     let history = historyByIp[userIp] || [];
+    // On ne garde que les 6 derniers messages (3 tours)
     const trimmedHistory = history.slice(-6);
 
     const messagesForOpenAi = [
@@ -943,10 +986,12 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       j.choices?.[0]?.message?.content ||
       "Désolé, je n'ai pas pu générer de réponse.";
 
+    // Mise à jour de la dernière vraie question
     if (!isFollowUp) {
       lastQuestionByIp[userIp] = effectiveQuestion;
     }
 
+    // Mise à jour de l'historique court pour cette IP
     history.push({ role: "user", content: finalUserMessage });
     history.push({ role: "assistant", content: answer });
     if (history.length > 12) {
