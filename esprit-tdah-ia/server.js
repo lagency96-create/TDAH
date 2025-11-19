@@ -427,6 +427,40 @@ async function serpSearch(query) {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
+// Domains "officiels" à privilégier pour les PRIX / ABONNEMENTS
+const trustedPriceDomains = [
+  "youtube.com",
+  "about.youtube.com",
+  "about.google",
+  "support.google.com",
+  "google.com",
+  "netflix.com",
+  "spotify.com",
+  "disneyplus.com",
+  "amazon.",
+  "primevideo.com",
+  "canalplus.com",
+  "canalplus.fr",
+  "canalplus-afrique.com",
+  "apple.com",
+  "tv.apple.com",
+  "playstation.com",
+  "xbox.com"
+];
+
+function filterTrustedPriceResults(results) {
+  if (!results || results.length === 0) return [];
+  return results.filter(r => {
+    if (!r.url) return false;
+    try {
+      const host = new URL(r.url).hostname.toLowerCase();
+      return trustedPriceDomains.some(d => host.includes(d));
+    } catch {
+      return false;
+    }
+  });
+}
+
 // Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
@@ -532,7 +566,7 @@ function scoreWebResult(question, result, currentYear) {
     if (y === currentYear || y === currentYear - 1) score += 1;
   }
 
-  // Sources fiables
+  // Sources fiables (général)
   if (
     /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
       text
@@ -653,11 +687,12 @@ RÉSULTATS WEB
 - Si aucune info fiable n'existe, tu dis que tu ne sais pas, plutôt que d'inventer.
 
 PRIX / CHIFFRES
-- Tu ne devines jamais un prix ou un chiffre précis.
-- Tu t'appuies sur les résultats web quand ils existent.
-- Si les sources donnent plusieurs valeurs, tu peux donner une fourchette et préciser que cela peut varier.
-- Si tu utilises une info datée, tu le dis clairement.
-- Si tu n'as pas de données fiables, tu dis que tu n'as pas de prix à jour.
+- Pour les PRIX, ABONNEMENTS et TARIFS, tu ignores tes connaissances internes et tu t'appuies uniquement sur les résultats web filtrés.
+- Tu privilégies toujours les sources officielles (site du service, page d'abonnement, documentation officielle).
+- Tu ne dis jamais "environ", "autour de", "dans ces eaux-là", "à vérifier", et tu ne donnes pas de fourchette de prix.
+- Si un prix officiel ressort clairement dans les résultats, tu le redonnes exactement (montant + devise) et tu précises le pays si utile.
+- Si aucun prix officiel n'est clair, tu expliques que tu ne peux pas donner de prix fiable plutôt que d'en inventer un.
+- Pour d'autres chiffres généraux (statistiques, populations, etc.), tu peux donner un ordre de grandeur si les sources ne sont pas parfaitement alignées, en précisant que ce sont des estimations.
 
 MEMOIRE COURTE / CONTEXTE
 - Le serveur peut te transmettre une petite partie récente de la conversation pour que tu restes cohérent.
@@ -851,7 +886,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport), on force
+  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport / prix / actu), on force
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -878,9 +913,32 @@ app.post("/chat", async (req, res) => {
       }
 
       const results = await serpSearch(query);
+      let baseResults = results || [];
+
+      // Si question de PRIX / ABONNEMENT : on privilégie les domaines officiels
+      const isPriceLike =
+        isPriceQuestion(effectiveQuestion) ||
+        (aiClass &&
+          (aiClass.domain === "prix_abonnement" ||
+            aiClass.domain === "produit_tech"));
+
+      if (baseResults.length > 0 && isPriceLike) {
+        const trustedOnly = filterTrustedPriceResults(baseResults);
+        if (trustedOnly.length > 0) {
+          log(
+            "Filtrage prix: utilisation EXCLUSIVE des domaines officiels pour cette question."
+          );
+          baseResults = trustedOnly;
+        } else {
+          log(
+            "Filtrage prix: aucun domaine officiel trouvé, on garde les résultats généraux."
+          );
+        }
+      }
+
       const filtered = filterWebResults(
         effectiveQuestion,
-        results || [],
+        baseResults,
         currentYear
       );
 
@@ -901,6 +959,19 @@ app.post("/chat", async (req, res) => {
           )
           .join("\n\n");
 
+        let extraInstructions = "";
+
+        // Renforcement PRIX STRICT dans le message utilisateur si question de prix
+        if (isPriceLike) {
+          extraInstructions = `
+IMPORTANT - PRIX / ABONNEMENTS :
+- Tu dois utiliser UNIQUEMENT les montants présents dans ces résultats web.
+- Tu ignores complètement tes anciennes connaissances internes sur les prix.
+- Tu ne dis jamais "environ", "autour de", "à peu près", "ça dépend", ni ne donnes de fourchette.
+- Si un prix officiel pour la France ressort clairement, tu le redonnes EXACTEMENT (montant + devise).
+- Si aucun prix officiel n'est clair, tu expliques que tu ne peux pas donner de prix fiable plutôt que d'en inventer un.`;
+        }
+
         finalUserMessage = `
 Question de l'utilisateur :
 "${effectiveQuestion}"
@@ -911,7 +982,7 @@ ${summary}
 En te basant en priorité sur ces informations RÉCENTES ET PERTINENTES :
 - Donne une réponse claire, structurée et TDAH-friendly.
 - Reste strictement sur le même sujet que la question.
-- Si les sources sont incertaines ou partielles, dis-le.
+- Si les sources sont incertaines ou partielles, dis-le.${extraInstructions}
 `;
       } else {
         log(
