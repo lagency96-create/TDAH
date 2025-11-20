@@ -1,4 +1,4 @@
-// server.js - TDIA avec gpt-5.1 (principal) + gpt-5-mini (classifieur + router) + SerpAPI
+// server.js - TDIA avec gpt-5.1 (principal) + gpt-4o-mini (classifieur + router) + SerpAPI
 
 import express from "express";
 import cors from "cors";
@@ -6,6 +6,7 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import multer from "multer"; // <-- AJOUT pour upload d'images
 
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +15,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const upload = multer(); // <-- AJOUT: middleware pour multipart/form-data
 
 // Servir le frontend (public/index.html)
 app.use(express.static(path.join(__dirname, "public")));
@@ -209,9 +212,9 @@ function isVolatileTopic(question) {
 // ================== CLASSIFIEUR IA (DOMAINE / BESOIN WEB) ==================
 
 async function classifyQuestionWithAI(question) {
-  // micro-décisions avec gpt-5-mini par défaut
+  // micro-décisions avec gpt-4o-mini par défaut
   const openAiModel =
-    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
+    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-4o-mini";
 
   const promptSystem = `
 Tu es un classifieur pour TDIA.
@@ -307,7 +310,7 @@ Jamais d'autre texte que ce JSON.
 
 async function analyzeEntitiesAndIntent(question) {
   const routerModel =
-    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
+    process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-4o-mini";
 
   const promptSystem = `
 Tu es un analyseur d'entités pour TDIA.
@@ -551,7 +554,7 @@ async function rewriteSearchQuery(question, aiClass, nerInfo, currentYear, local
   }
 
   // Petite IA pour reformuler la question en requête Google clean
-  const model = process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-5-mini";
+  const model = process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-4o-mini";
 
   const examplesEn = `
 Exemples (EN) :
@@ -637,9 +640,9 @@ ${lang === "en" ? examplesEn : examplesFr}
 // ================== SERPAPI SEARCH (WEB) ==================
 
 async function serpSearch(query, hl = "fr", gl = "fr") {
-  const apiKey = process.env.SERP_API_KEY;
+  const apiKey = process.env.SERPAPI_KEY || process.env.SERP_API_KEY;
   if (!apiKey) {
-    log("SerpAPI key manquante (SERP_API_KEY)");
+    log("SerpAPI key manquante (SERPAPI_KEY / SERP_API_KEY)");
     return null;
   }
 
@@ -959,7 +962,7 @@ app.post("/chat", async (req, res) => {
     diag.push(`- OpenAI MODEL (principal): ${process.env.MODEL || "gpt-5.1"}`);
     diag.push(
       `- CLASSIFIER_MODEL: ${
-        process.env.CLASSIFIER_MODEL || "gpt-5-mini"
+        process.env.CLASSIFIER_MODEL || "gpt-4o-mini"
       }`
     );
     diag.push(
@@ -967,15 +970,17 @@ app.post("/chat", async (req, res) => {
         process.env.OPENAI_API_KEY ? "présente" : "absente"
       }`
     );
+    const serpKeyPresent =
+      (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) ? "présente" : "absente";
     diag.push(
-      `- SERP_API_KEY: ${process.env.SERP_API_KEY ? "présente" : "absente"}`
+      `- SERPAPI_KEY / SERP_API_KEY: ${serpKeyPresent}`
     );
     diag.push(
       `- Messages d'historique pour cette IP: ${historyForIp.length}`
     );
 
     try {
-      if (process.env.SERP_API_KEY) {
+      if (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) {
         const testResults = await serpSearch("test google actualité", "fr", "fr");
         diag.push(
           `- Test SerpAPI: ${
@@ -1267,6 +1272,112 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     });
   } catch (e) {
     log("Erreur serveur:", e);
+    return res
+      .status(500)
+      .json({ error: "server_error", detail: String(e) });
+  }
+});
+
+// ================== ROUTE /chat-image (images + texte) ==================
+
+app.post("/chat-image", upload.single("image"), async (req, res) => {
+  try {
+    const file = req.file;
+    const message = req.body?.message || "";
+    if (!file) {
+      return res.status(400).json({ error: "image manquante (champ 'image')" });
+    }
+
+    const userIp = req.ip || "unknown_ip";
+    log("Incoming image message from", userIp, "| text:", message);
+
+    const now = new Date();
+    const currentDate = now.toLocaleDateString("fr-FR", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+
+    const imageModel =
+      process.env.IMAGE_MODEL || process.env.MODEL || "gpt-4.1-mini";
+
+    // Récupérer l'historique court pour cette IP
+    let history = historyByIp[userIp] || [];
+    const trimmedHistory = history.slice(-6);
+
+    const base64Image = file.buffer.toString("base64");
+    const mime = file.mimetype || "image/jpeg";
+    const dataUrl = `data:${mime};base64,${base64Image}`;
+
+    const userText = message && message.trim().length > 0
+      ? message.trim()
+      : "Analyse cette image et commente ce que tu vois de façon utile pour l'utilisateur.";
+
+    const messagesForOpenAi = [
+      { role: "system", content: buildSystemPrompt(currentDate, false) },
+      ...trimmedHistory,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: userText },
+          {
+            type: "input_image",
+            image_url: { url: dataUrl }
+          }
+        ]
+      }
+    ];
+
+    log(
+      "Calling OpenAI vision with model:",
+      imageModel,
+      "| historyMessagesSent:",
+      trimmedHistory.length
+    );
+
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: imageModel,
+        temperature: 0.3,
+        messages: messagesForOpenAi,
+        max_completion_tokens: 700
+      })
+    });
+
+    if (!r.ok) {
+      const t = await r.text();
+      log("OpenAI vision error:", r.status, t);
+      return res.status(500).json({ error: "openai_error", detail: t });
+    }
+
+    const j = await r.json();
+    const answer =
+      j.choices?.[0]?.message?.content ||
+      "Désolé, je n'ai pas pu analyser l'image.";
+
+    // Mise à jour de l'historique pour cette IP
+    const userHistoryText =
+      message && message.trim().length > 0
+        ? `[IMAGE] ${message.trim()}`
+        : "[IMAGE] (pas de texte)";
+    history.push({ role: "user", content: userHistoryText });
+    history.push({ role: "assistant", content: answer });
+    if (history.length > 12) {
+      history = history.slice(-12);
+    }
+    historyByIp[userIp] = history;
+
+    return res.json({
+      reply: answer
+    });
+  } catch (e) {
+    log("Erreur /chat-image:", e);
     return res
       .status(500)
       .json({ error: "server_error", detail: String(e) });
