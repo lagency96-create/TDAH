@@ -1,4 +1,4 @@
-// server.js - TDIA avec gpt-5.1 (principal) + gpt-4o-mini (classifieur + router) + SerpAPI
+// server.js - TDIA avec gpt-5.1 (principal) + gpt-4o-mini (classifieur + router) + SerpAPI + upload image
 
 import express from "express";
 import cors from "cors";
@@ -6,7 +6,7 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import multer from "multer"; // <-- AJOUT pour upload d'images
+import multer from "multer"; // <-- AJOUT POUR LES IMAGES
 
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
@@ -16,7 +16,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const upload = multer(); // <-- AJOUT: middleware pour multipart/form-data
+// Multer en mémoire (pas de fichier sur le disque, tout reste en RAM)
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Servir le frontend (public/index.html)
 app.use(express.static(path.join(__dirname, "public")));
@@ -25,7 +26,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const lastQuestionByIp = {};
 
 // Mémoire courte de conversation : petit historique par IP
-// On stocke une liste de { role: "user" | "assistant", content: string }
+// On stocke une liste de { role: "user" | "assistant", content: string | array }
 const historyByIp = {};
 
 // Petit helper de log horodaté
@@ -253,7 +254,6 @@ Jamais d'autre texte que ce JSON.
 
   const body = {
     model: openAiModel,
-    // pas de temperature personnalisée -> on laisse la valeur par défaut
     max_completion_tokens: 120,
     messages: [
       { role: "system", content: promptSystem },
@@ -342,7 +342,6 @@ Règles :
 
   const body = {
     model: routerModel,
-    // pas de temperature personnalisée ici non plus
     max_completion_tokens: 160,
     messages: [
       { role: "system", content: promptSystem },
@@ -393,7 +392,6 @@ Règles :
 
 // ================== ROUTEUR LOCAL / INTERNATIONAL + RÉÉCRITURE REQUÊTE ==================
 
-// Détection locale/internationale + choix langue / hl / gl pour SerpAPI
 function detectSearchLocale(question, aiClass) {
   const q = normalizeText(question);
 
@@ -402,7 +400,6 @@ function detectSearchLocale(question, aiClass) {
   let gl = "fr";
   let targetCountry = (aiClass && aiClass.country) || "france";
 
-  // Pays explicites dans la question
   if (/etats unis|états unis|\busa\b|\bus\b|amerique|amérique/.test(q)) {
     targetCountry = "usa";
   } else if (/royaume uni|angleterre|\buk\b|grande bretagne|grande-bretagne/.test(q)) {
@@ -425,12 +422,10 @@ function detectSearchLocale(question, aiClass) {
     targetCountry = "maghreb";
   }
 
-  // Global brands / plateformes internationales
   const isGlobalBrand = /youtube|netflix|amazon|prime video|primevideo|spotify|instagram|tiktok|disney\+|disney plus|apple|samsung|tesla|facebook|meta/.test(
     q
   );
 
-  // Sport international typique (UFC, NBA, F1...)
   const isUfcLike =
     /ufc|bellator|pfl|one championship|one fc/.test(q);
   const isGlobalLeague =
@@ -438,13 +433,11 @@ function detectSearchLocale(question, aiClass) {
       q
     );
 
-  // Sport FR typique
   const isFrenchLeagueSport =
     /ligue 1|ligue1|ligue 2|ligue2|psg|paris saint germain|ol lyon|olympique lyonnais|om|olympique de marseille|coupe de france/.test(
       q
     );
 
-  // Cas 1 : questions de prix sur des plateformes globales → FR par défaut (France)
   if (isPriceQuestion(question) && isGlobalBrand && targetCountry === "france") {
     lang = "fr";
     hl = "fr";
@@ -452,7 +445,6 @@ function detectSearchLocale(question, aiClass) {
     return { lang, hl, gl, targetCountry };
   }
 
-  // Cas 2 : sport FR local
   if (isFrenchLeagueSport) {
     lang = "fr";
     hl = "fr";
@@ -460,7 +452,6 @@ function detectSearchLocale(question, aiClass) {
     return { lang, hl, gl, targetCountry: "france" };
   }
 
-  // Cas 3 : sport vraiment global (UFC, NBA, F1, etc.)
   if (isUfcLike || isGlobalLeague) {
     lang = "en";
     hl = "en";
@@ -468,24 +459,14 @@ function detectSearchLocale(question, aiClass) {
     return { lang, hl, gl, targetCountry: "usa" };
   }
 
-  // Cas 4 : si le classifieur a détecté un autre pays que la France
   if (targetCountry !== "france") {
     switch (targetCountry) {
       case "usa":
-        lang = "en";
-        hl = "en";
-        gl = "us";
-        break;
+        lang = "en"; hl = "en"; gl = "us"; break;
       case "uk":
-        lang = "en";
-        hl = "en";
-        gl = "gb";
-        break;
+        lang = "en"; hl = "en"; gl = "gb"; break;
       case "canada":
-        lang = "en";
-        hl = "en";
-        gl = "ca";
-        break;
+        lang = "en"; hl = "en"; gl = "ca"; break;
       case "suisse":
       case "belgique":
       case "espagne":
@@ -493,21 +474,13 @@ function detectSearchLocale(question, aiClass) {
       case "turquie":
       case "italie":
       case "maghreb":
-        // Pour ces cas-là on reste simple : FR, mais on pourrait raffiner plus tard
-        lang = "fr";
-        hl = "fr";
-        gl = "fr";
-        break;
+        lang = "fr"; hl = "fr"; gl = "fr"; break;
       default:
-        lang = "fr";
-        hl = "fr";
-        gl = "fr";
-        break;
+        lang = "fr"; hl = "fr"; gl = "fr"; break;
     }
     return { lang, hl, gl, targetCountry };
   }
 
-  // Cas 5 : domaine global (tech, finance, actualité générale) sans pays explicite
   const domain = aiClass ? aiClass.domain : null;
   const globallyOrientedDomains = [
     "produit_tech",
@@ -523,19 +496,16 @@ function detectSearchLocale(question, aiClass) {
     return { lang, hl, gl, targetCountry: "usa" };
   }
 
-  // Par défaut : France, FR
   lang = "fr";
   hl = "fr";
   gl = "fr";
   return { lang, hl, gl, targetCountry: "france" };
 }
 
-// Réécriture intelligente de la requête façon "requête Google propre"
 async function rewriteSearchQuery(question, aiClass, nerInfo, currentYear, locale) {
   const lang = locale.lang || "fr";
   const q = String(question || "").trim();
 
-  // Cas spécial : pattern "X vs Y" sportif détecté par le NER
   if (
     nerInfo &&
     nerInfo.is_vs_pattern &&
@@ -553,7 +523,6 @@ async function rewriteSearchQuery(question, aiClass, nerInfo, currentYear, local
     }
   }
 
-  // Petite IA pour reformuler la question en requête Google clean
   const model = process.env.CLASSIFIER_MODEL || process.env.MODEL || "gpt-4o-mini";
 
   const examplesEn = `
@@ -620,7 +589,6 @@ ${lang === "en" ? examplesEn : examplesFr}
     if (!r.ok) {
       const txt = await r.text();
       log("Erreur rewriteSearchQuery IA:", r.status, txt);
-      // Fallback simple
       return `${q} ${currentYear}`;
     }
 
@@ -676,7 +644,6 @@ async function serpSearch(query, hl = "fr", gl = "fr") {
 
 // ================== SCORE / FILTRAGE DES RÉSULTATS WEB ==================
 
-// Version assouplie : moins de pénalités "bêtes", bonus quand le thème colle.
 function scoreWebResult(question, result, currentYear) {
   const qNorm = normalizeText(question);
   const qKeywords = extractKeywords(question);
@@ -691,7 +658,6 @@ function scoreWebResult(question, result, currentYear) {
 
   let score = 0;
 
-  // Overlap mots-clés (coeur de la pertinence)
   let overlap = 0;
   for (const kw of qKeywords) {
     if (kw && text.includes(kw)) {
@@ -721,7 +687,6 @@ function scoreWebResult(question, result, currentYear) {
     score += 3;
   }
 
-  // Sport
   const questionIsSports =
     /foot|football|basket|nba|ligue 1|ufc|mma|tennis|match|but|buts|score|combat|combattu|fight/.test(
       qNorm
@@ -734,7 +699,6 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Politique / lois
   const questionIsPolitics =
     /élection|election|politique|présidentielle|gouvernement|loi|lois|décret|decret|parlement|assemblée nationale|assemblee nationale|sénat|senat/.test(
       qNorm
@@ -747,7 +711,6 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Immobilier
   const questionIsRealEstate =
     /immobilier|loyer|appartement|maison|m2|mètre carré|metre carre|achat maison|achat appartement/.test(
       qNorm
@@ -760,7 +723,6 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Divertissement
   const questionIsEntertainment =
     /film|série|serie|prime video|primevideo|disney\+|disney plus|anime|manga|netflix|cinema|cinéma/.test(
       qNorm
@@ -773,7 +735,6 @@ function scoreWebResult(question, result, currentYear) {
     score += 2;
   }
 
-  // Années
   const years = text.match(/20\d{2}/g) || [];
   for (const yStr of years) {
     const y = parseInt(yStr, 10);
@@ -781,7 +742,6 @@ function scoreWebResult(question, result, currentYear) {
     if (y === currentYear || y === currentYear - 1) score += 1;
   }
 
-  // Sources fiables
   if (
     /wikipedia\.org|gouv\.fr|service-public\.fr|legifrance\.gouv\.fr|eur-lex\.europa\.eu|amazon\./.test(
       text
@@ -940,7 +900,7 @@ OBJECTIF
 `;
 }
 
-// ================== ROUTE /chat ==================
+// ================== ROUTE /chat (TEXTE SEUL) ==================
 
 app.post("/chat", async (req, res) => {
   const { message } = req.body || {};
@@ -953,7 +913,6 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
-  // Mode diagnostic interne
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
     const historyForIp = historyByIp[userIp] || [];
@@ -999,15 +958,15 @@ app.post("/chat", async (req, res) => {
     return res.json({ reply: diag.join("\n") });
   }
 
-  // Détection messages du type "rep à ma question"
   const followUpRegex =
     /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
 
   const isFollowUp = followUpRegex.test(rawMessage.trim());
 
+  const userIpKey = userIp;
   let effectiveQuestion = rawMessage;
-  if (isFollowUp && lastQuestionByIp[userIp]) {
-    effectiveQuestion = lastQuestionByIp[userIp];
+  if (isFollowUp && lastQuestionByIp[userIpKey]) {
+    effectiveQuestion = lastQuestionByIp[userIpKey];
     log("Follow-up detected, using last question:", effectiveQuestion);
   }
 
@@ -1028,10 +987,8 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
-  // Volatilité regex "classique"
   const volatileRegex = isVolatileTopic(effectiveQuestion);
 
-  // Ancienne logique regex (backup) pour dire "ça sent le web"
   const regexSuggestsWeb =
     isPriceQuestion(effectiveQuestion) ||
     isProductOrServiceQuestion(effectiveQuestion) ||
@@ -1043,7 +1000,6 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
-  // Classifieur IA général
   let aiClass = await classifyQuestionWithAI(effectiveQuestion);
   if (aiClass) {
     log(
@@ -1064,7 +1020,6 @@ app.post("/chat", async (req, res) => {
   const volatileFromAI =
     aiClass && (aiClass.volatility === "high" || aiClass.volatility === "medium");
 
-  // Domaines volatiles par nature
   const highVolatileDomains = [
     "sport",
     "prix_abonnement",
@@ -1078,7 +1033,6 @@ app.post("/chat", async (req, res) => {
   const domainIsHighVolatile =
     aiClass && highVolatileDomains.includes(aiClass.domain);
 
-  // Router + NER : détection pattern "X vs Y", domaine sport, etc.
   const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
   let isVsSportsQuery = false;
   let vsEntities = [];
@@ -1102,7 +1056,6 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Déclenchement web : dès que c'est un sujet qui bouge (surtout sport), on force
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -1118,9 +1071,7 @@ app.post("/chat", async (req, res) => {
     try {
       log("Web search triggered for question:", effectiveQuestion);
 
-      // Choix locale/langue (FR/local vs EN/US etc.)
       const locale = detectSearchLocale(effectiveQuestion, aiClass);
-      // Réécriture intelligente de la requête
       const query = await rewriteSearchQuery(
         effectiveQuestion,
         aiClass,
@@ -1196,13 +1147,10 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 
   try {
-    // Modèle principal de chat: gpt-5.1
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
 
-    // Récupérer l'historique court pour cette IP (mémoire courte)
-    let history = historyByIp[userIp] || [];
-    // On ne garde que les 6 derniers messages (3 tours)
+    let history = historyByIp[userIpKey] || [];
     const trimmedHistory = history.slice(-6);
 
     const messagesForOpenAi = [
@@ -1249,18 +1197,16 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       j.choices?.[0]?.message?.content ||
       "Désolé, je n'ai pas pu générer de réponse.";
 
-    // Mise à jour de la dernière vraie question
     if (!isFollowUp) {
-      lastQuestionByIp[userIp] = effectiveQuestion;
+      lastQuestionByIp[userIpKey] = effectiveQuestion;
     }
 
-    // Mise à jour de l'historique court pour cette IP
     history.push({ role: "user", content: finalUserMessage });
     history.push({ role: "assistant", content: answer });
     if (history.length > 12) {
       history = history.slice(-12);
     }
-    historyByIp[userIp] = history;
+    historyByIp[userIpKey] = history;
 
     return res.json({
       reply: answer,
@@ -1278,18 +1224,17 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   }
 });
 
-// ================== ROUTE /chat-image (images + texte) ==================
+// ================== ROUTE /chat-image (IMAGE + TEXTE OPTIONNEL) ==================
 
 app.post("/chat-image", upload.single("image"), async (req, res) => {
   try {
-    const file = req.file;
-    const message = req.body?.message || "";
-    if (!file) {
-      return res.status(400).json({ error: "image manquante (champ 'image')" });
-    }
-
     const userIp = req.ip || "unknown_ip";
-    log("Incoming image message from", userIp, "| text:", message);
+    const text = req.body?.message || "";
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: "image manquante" });
+    }
 
     const now = new Date();
     const currentDate = now.toLocaleDateString("fr-FR", {
@@ -1299,41 +1244,43 @@ app.post("/chat-image", upload.single("image"), async (req, res) => {
       day: "numeric"
     });
 
-    const imageModel =
-      process.env.IMAGE_MODEL || process.env.MODEL || "gpt-4.1-mini";
+    const finalVolatile = false;
 
-    // Récupérer l'historique court pour cette IP
-    let history = historyByIp[userIp] || [];
+    const openAiModel = process.env.MODEL || "gpt-5.1";
+
+    const history = historyByIp[userIp] || [];
     const trimmedHistory = history.slice(-6);
 
-    const base64Image = file.buffer.toString("base64");
-    const mime = file.mimetype || "image/jpeg";
-    const dataUrl = `data:${mime};base64,${base64Image}`;
+    const base64 = file.buffer.toString("base64");
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
-    const userText = message && message.trim().length > 0
-      ? message.trim()
-      : "Analyse cette image et commente ce que tu vois de façon utile pour l'utilisateur.";
-
-    const messagesForOpenAi = [
-      { role: "system", content: buildSystemPrompt(currentDate, false) },
-      ...trimmedHistory,
+    const userContent = [
       {
-        role: "user",
-        content: [
-          { type: "text", text: userText },
-          {
-            type: "input_image",
-            image_url: { url: dataUrl }
-          }
-        ]
+        type: "text",
+        text:
+          text && text.trim().length > 0
+            ? `L'utilisateur a envoyé une image et a dit: "${text}". Analyse ce qu'il y a sur la photo et réponds-lui de manière claire, simple et TDAH-friendly.`
+            : `L'utilisateur a envoyé une image. Décris ce que tu vois et donne-lui les infos utiles de manière claire, simple et TDAH-friendly.`
+      },
+      {
+        type: "image_url",
+        image_url: {
+          url: dataUrl
+        }
       }
     ];
 
+    const messagesForOpenAi = [
+      { role: "system", content: buildSystemPrompt(currentDate, finalVolatile) },
+      ...trimmedHistory,
+      { role: "user", content: userContent }
+    ];
+
     log(
-      "Calling OpenAI vision with model:",
-      imageModel,
-      "| historyMessagesSent:",
-      trimmedHistory.length
+      "Calling OpenAI (vision) with model:",
+      openAiModel,
+      "| image size:",
+      file.size
     );
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1343,8 +1290,8 @@ app.post("/chat-image", upload.single("image"), async (req, res) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: imageModel,
-        temperature: 0.3,
+        model: openAiModel,
+        temperature: 0.35,
         messages: messagesForOpenAi,
         max_completion_tokens: 700
       })
@@ -1353,7 +1300,7 @@ app.post("/chat-image", upload.single("image"), async (req, res) => {
     if (!r.ok) {
       const t = await r.text();
       log("OpenAI vision error:", r.status, t);
-      return res.status(500).json({ error: "openai_error", detail: t });
+      return res.status(500).json({ error: "openai_vision_error", detail: t });
     }
 
     const j = await r.json();
@@ -1361,20 +1308,26 @@ app.post("/chat-image", upload.single("image"), async (req, res) => {
       j.choices?.[0]?.message?.content ||
       "Désolé, je n'ai pas pu analyser l'image.";
 
-    // Mise à jour de l'historique pour cette IP
-    const userHistoryText =
-      message && message.trim().length > 0
-        ? `[IMAGE] ${message.trim()}`
-        : "[IMAGE] (pas de texte)";
-    history.push({ role: "user", content: userHistoryText });
+    const historyEntryText =
+      text && text.trim().length > 0
+        ? `(IMAGE + TEXTE) L'utilisateur a envoyé une image et a dit: "${text}"`
+        : `(IMAGE) L'utilisateur a envoyé une image sans texte.`;
+
+    history.push({ role: "user", content: historyEntryText });
     history.push({ role: "assistant", content: answer });
     if (history.length > 12) {
-      history = history.slice(-12);
+      historyByIp[userIp] = history.slice(-12);
+    } else {
+      historyByIp[userIp] = history;
     }
-    historyByIp[userIp] = history;
 
     return res.json({
-      reply: answer
+      reply: answer,
+      usedSearch: false,
+      volatile: false,
+      modeLabel: "analyse d'image",
+      domain: "autre",
+      country: "france"
     });
   } catch (e) {
     log("Erreur /chat-image:", e);
