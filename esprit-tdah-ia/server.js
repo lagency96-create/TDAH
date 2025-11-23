@@ -900,7 +900,7 @@ OBJECTIF
 `;
 }
 
-// ================== ROUTE /chat (TEXTE SEUL) ==================
+// ================== ROUTE /chat (TEXTE SEUL, STREAMING) ==================
 
 app.post("/chat", async (req, res) => {
   const { message } = req.body || {};
@@ -913,6 +913,7 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
+  // ===== DIAGNOSTIC SPÉCIAL =====
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
     const historyForIp = historyByIp[userIp] || [];
@@ -958,6 +959,7 @@ app.post("/chat", async (req, res) => {
     return res.json({ reply: diag.join("\n") });
   }
 
+  // ===== "rep à ma question" =====
   const followUpRegex =
     /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
 
@@ -972,6 +974,7 @@ app.post("/chat", async (req, res) => {
 
   let finalUserMessage = effectiveQuestion;
 
+  // ===== TEMPS / DATE =====
   const now = new Date();
   const currentDate = now.toLocaleDateString("fr-FR", {
     weekday: "long",
@@ -987,6 +990,7 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
+  // ===== VOLATILITÉ (REGEX + IA) =====
   const volatileRegex = isVolatileTopic(effectiveQuestion);
 
   const regexSuggestsWeb =
@@ -1033,6 +1037,7 @@ app.post("/chat", async (req, res) => {
   const domainIsHighVolatile =
     aiClass && highVolatileDomains.includes(aiClass.domain);
 
+  // ===== ENTITÉS / "X vs Y" =====
   const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
   let isVsSportsQuery = false;
   let vsEntities = [];
@@ -1056,6 +1061,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
+  // ===== DÉCISION : WEB OU PAS ? =====
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -1067,6 +1073,7 @@ app.post("/chat", async (req, res) => {
 
   let usedSearch = false;
 
+  // ===== SI BESOIN, ON LANCE SERPAPI ET ON RÉÉCRIT LA QUESTION =====
   if (forceSearch) {
     try {
       log("Web search triggered for question:", effectiveQuestion);
@@ -1146,6 +1153,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     }
   }
 
+  // ===== ICI : APPEL OPENAI EN STREAMING =====
   try {
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
@@ -1172,7 +1180,11 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       trimmedHistory.length
     );
 
-    // ========= APPEL STREAMING VERS OPENAI (backend) =========
+    // On prépare la réponse HTTP pour envoyer le texte au fur et à mesure
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Transfer-Encoding", "chunked");
+
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1188,41 +1200,86 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       })
     });
 
-    if (!r.ok) {
-      const t = await r.text();
-      log("OpenAI error:", r.status, t);
-      return res.status(500).json({ error: "openai_error", detail: t });
+    if (!r.ok || !r.body) {
+      const t = await r.text().catch(() => "");
+      log("OpenAI error (stream):", r.status, t);
+      res.statusCode = 500;
+      res.write("Erreur serveur (OpenAI).");
+      res.end();
+      return;
     }
 
-    // r.body est un Readable stream Node (PAS getReader → on itère avec for await)
-    const decoder = new TextDecoder("utf-8");
-    let fullText = "";
+    let fullAnswer = "";
+    let buffer = "";
 
     try {
-      outer: for await (const chunk of r.body) {
-        const str = decoder.decode(chunk, { stream: true });
+      for await (const chunk of r.body) {
+        const textChunk = chunk.toString("utf8");
+        buffer += textChunk;
 
-        // La réponse streaming OpenAI est envoyée en lignes "data: {...}\n\n"
-        const lines = str.split("\n");
-        for (let line of lines) {
-          line = line.trim();
-          if (!line || !line.startsWith("data:")) continue;
+        let lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") {
-            break outer;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data:")) continue;
+
+          const dataStr = trimmed.slice(5).trim(); // après "data:"
+          if (dataStr === "[DONE]") {
+            break;
           }
 
           try {
-            const json = JSON.parse(payload);
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              fullText += delta;
+            const json = JSON.parse(dataStr);
+            const delta = json.choices?.[0]?.delta;
+            const content = delta?.content || "";
+            if (content) {
+              fullAnswer += content;
+              res.write(content);        // <- texte envoyé en direct au front
             }
-          } catch (e) {
-            // Si une ligne n'est pas un JSON complet, on log mais on ne crash pas
-            log("Chunk streaming OpenAI non parsable:", e);
+          } catch {
+            // ligne de contrôle non JSON, on ignore
           }
+        }
+      }
+    } catch (streamErr) {
+      log("Erreur pendant le streaming OpenAI:", streamErr);
+      res.write("\n[Erreur pendant le streaming IA]");
+    }
+
+    // On termine la réponse HTTP
+    if (!res.writableEnded) {
+      res.end();
+    }
+
+    // Mise à jour de la mémoire courte une fois la réponse complète connue
+    if (!isFollowUp) {
+      lastQuestionByIp[userIpKey] = effectiveQuestion;
+    }
+
+    history.push({ role: "user", content: finalUserMessage });
+    history.push({ role: "assistant", content: fullAnswer || "…" });
+    if (history.length > 12) {
+      history = history.slice(-12);
+    }
+    historyByIp[userIpKey] = history;
+
+    log("Streaming terminé, longueur réponse:", fullAnswer.length);
+  } catch (e) {
+    log("Erreur serveur (stream):", e);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.write("Erreur serveur interne.");
+    } else if (!res.writableEnded) {
+      res.write("\n[Erreur serveur interne]");
+    }
+    try {
+      if (!res.writableEnded) res.end();
+    } catch {}
+  }
+});
+
         }
       }
     } catch (e) {
