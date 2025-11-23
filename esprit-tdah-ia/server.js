@@ -900,7 +900,7 @@ OBJECTIF
 `;
 }
 
-// ================== ROUTE /chat (TEXTE SEUL AVEC STREAMING) ==================
+// ================== ROUTE /chat (TEXTE SEUL) ==================
 
 app.post("/chat", async (req, res) => {
   const { message } = req.body || {};
@@ -913,7 +913,6 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
-  // ================== MODE DIAGNOSTIC (réponse non streamée) ==================
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
     const historyForIp = historyByIp[userIp] || [];
@@ -958,8 +957,6 @@ app.post("/chat", async (req, res) => {
 
     return res.json({ reply: diag.join("\n") });
   }
-
-  // ================== LOGIQUE NORMALE (AVEC STREAMING RÉEL) ==================
 
   const followUpRegex =
     /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
@@ -1149,7 +1146,6 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     }
   }
 
-  // À partir d'ici : appel OpenAI EN STREAMING RÉEL
   try {
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
@@ -1176,11 +1172,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       trimmedHistory.length
     );
 
-    // Prépare la réponse HTTP pour streamer du texte brut (caractère par caractère)
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-
+    // ========= APPEL STREAMING VERS OPENAI (backend) =========
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1196,65 +1188,75 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       })
     });
 
-    if (!r.ok || !r.body) {
-      const t = await r.text().catch(() => "");
-      log("OpenAI stream error:", r.status, t);
-      res.write("Désolé, une erreur est survenue côté modèle.");
-      res.end();
-      return;
+    if (!r.ok) {
+      const t = await r.text();
+      log("OpenAI error:", r.status, t);
+      return res.status(500).json({ error: "openai_error", detail: t });
     }
 
-    const reader = r.body.getReader();
+    // r.body est un Readable stream Node (PAS getReader → on itère avec for await)
     const decoder = new TextDecoder("utf-8");
-    let fullAnswer = "";
+    let fullText = "";
 
-    // Boucle de lecture du flux OpenAI
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
+    try {
+      outer: for await (const chunk of r.body) {
+        const str = decoder.decode(chunk, { stream: true });
 
-      const lines = chunk.split("\n").filter(l => l.trim().startsWith("data:"));
-      for (const line of lines) {
-        const dataStr = line.replace(/^data:\s*/, "").trim();
-        if (!dataStr || dataStr === "[DONE]") {
-          continue;
-        }
-        let parsed;
-        try {
-          parsed = JSON.parse(dataStr);
-        } catch (e) {
-          continue;
-        }
-        const delta = parsed.choices?.[0]?.delta?.content || "";
-        if (delta) {
-          fullAnswer += delta;
-          res.write(delta);
+        // La réponse streaming OpenAI est envoyée en lignes "data: {...}\n\n"
+        const lines = str.split("\n");
+        for (let line of lines) {
+          line = line.trim();
+          if (!line || !line.startsWith("data:")) continue;
+
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") {
+            break outer;
+          }
+
+          try {
+            const json = JSON.parse(payload);
+            const delta = json.choices?.[0]?.delta?.content;
+            if (delta) {
+              fullText += delta;
+            }
+          } catch (e) {
+            // Si une ligne n'est pas un JSON complet, on log mais on ne crash pas
+            log("Chunk streaming OpenAI non parsable:", e);
+          }
         }
       }
+    } catch (e) {
+      log("Erreur pendant le streaming OpenAI:", e);
     }
 
-    // On termine le flux pour le client
-    res.end();
+    const answer =
+      fullText.trim() ||
+      "Désolé, je n'ai pas pu générer de réponse.";
 
-    // MAJ mémoire (après coup, pour garder l'historique)
     if (!isFollowUp) {
       lastQuestionByIp[userIpKey] = effectiveQuestion;
     }
 
     history.push({ role: "user", content: finalUserMessage });
-    history.push({ role: "assistant", content: fullAnswer || "" });
+    history.push({ role: "assistant", content: answer });
     if (history.length > 12) {
       history = history.slice(-12);
     }
     historyByIp[userIpKey] = history;
 
+    return res.json({
+      reply: answer,
+      usedSearch,
+      volatile: finalVolatile,
+      modeLabel,
+      domain: aiClass ? aiClass.domain : null,
+      country: aiClass ? aiClass.country : "france"
+    });
   } catch (e) {
     log("Erreur serveur (stream):", e);
-    try {
-      res.write("\n\nDésolé, erreur serveur pendant le streaming.");
-      res.end();
-    } catch (_) {}
+    return res
+      .status(500)
+      .json({ error: "server_error", detail: String(e) });
   }
 });
 
