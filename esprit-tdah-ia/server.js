@@ -900,7 +900,7 @@ OBJECTIF
 `;
 }
 
-// ================== ROUTE /chat (TEXTE SEUL, STREAMING) ==================
+// ================== ROUTE /chat (TEXTE SEUL) ==================
 
 app.post("/chat", async (req, res) => {
   const { message } = req.body || {};
@@ -913,7 +913,7 @@ app.post("/chat", async (req, res) => {
 
   log("Incoming message:", rawMessage, "from", userIp);
 
-  // ===== DIAGNOSTIC SPÉCIAL =====
+  // Mode diagnostic
   if (isDiagnosticMessage(rawMessage)) {
     const diag = [];
     const historyForIp = historyByIp[userIp] || [];
@@ -959,7 +959,7 @@ app.post("/chat", async (req, res) => {
     return res.json({ reply: diag.join("\n") });
   }
 
-  // ===== "rep à ma question" =====
+  // Gestion "rep à ma question"
   const followUpRegex =
     /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
 
@@ -974,7 +974,6 @@ app.post("/chat", async (req, res) => {
 
   let finalUserMessage = effectiveQuestion;
 
-  // ===== TEMPS / DATE =====
   const now = new Date();
   const currentDate = now.toLocaleDateString("fr-FR", {
     weekday: "long",
@@ -985,12 +984,13 @@ app.post("/chat", async (req, res) => {
   const currentYear = now.getFullYear();
   const qNorm = normalizeText(effectiveQuestion);
 
+  // Détection questions sur le futur lointain
   const isFutureQuestion =
     /en 20(2[6-9]|3\d)|dans \d+ ans|année prochaine|l'année prochaine|dans le futur/.test(
       qNorm
     );
 
-  // ===== VOLATILITÉ (REGEX + IA) =====
+  // Volatilité regex
   const volatileRegex = isVolatileTopic(effectiveQuestion);
 
   const regexSuggestsWeb =
@@ -1004,6 +1004,7 @@ app.post("/chat", async (req, res) => {
       qNorm
     );
 
+  // Classifieur IA (gpt-4o-mini par défaut)
   let aiClass = await classifyQuestionWithAI(effectiveQuestion);
   if (aiClass) {
     log(
@@ -1037,7 +1038,7 @@ app.post("/chat", async (req, res) => {
   const domainIsHighVolatile =
     aiClass && highVolatileDomains.includes(aiClass.domain);
 
-  // ===== ENTITÉS / "X vs Y" =====
+  // NER / router pour pattern X vs Y
   const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
   let isVsSportsQuery = false;
   let vsEntities = [];
@@ -1061,7 +1062,7 @@ app.post("/chat", async (req, res) => {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // ===== DÉCISION : WEB OU PAS ? =====
+  // Décision finale: doit-on déclencher une recherche web ?
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -1073,7 +1074,6 @@ app.post("/chat", async (req, res) => {
 
   let usedSearch = false;
 
-  // ===== SI BESOIN, ON LANCE SERPAPI ET ON RÉÉCRIT LA QUESTION =====
   if (forceSearch) {
     try {
       log("Web search triggered for question:", effectiveQuestion);
@@ -1153,7 +1153,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     }
   }
 
-  // ===== ICI : APPEL OPENAI EN STREAMING =====
+  // ================== APPEL OPENAI AVEC STREAMING INTERNE (PAS SSE) ==================
   try {
     const openAiModel = process.env.MODEL || "gpt-5.1";
     const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
@@ -1168,7 +1168,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     ];
 
     log(
-      "Calling OpenAI (stream) with model:",
+      "Calling OpenAI (stream interne) with model:",
       openAiModel,
       "| usedSearch:",
       usedSearch,
@@ -1180,11 +1180,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       trimmedHistory.length
     );
 
-    // On prépare la réponse HTTP pour envoyer le texte au fur et à mesure
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Transfer-Encoding", "chunked");
-
+    // On demande un stream à l'API OpenAI, mais on reconstruit la réponse côté serveur
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1200,16 +1196,13 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       })
     });
 
-    if (!r.ok || !r.body) {
-      const t = await r.text().catch(() => "");
-      log("OpenAI error (stream):", r.status, t);
-      res.statusCode = 500;
-      res.write("Erreur serveur (OpenAI).");
-      res.end();
-      return;
+    if (!r.ok) {
+      const t = await r.text();
+      log("OpenAI error:", r.status, t);
+      return res.status(500).json({ error: "openai_error", detail: t });
     }
 
-    let fullAnswer = "";
+    let answer = "";
     let buffer = "";
 
     try {
@@ -1222,73 +1215,54 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data:")) continue;
-
-          const dataStr = trimmed.slice(5).trim(); // après "data:"
-          if (dataStr === "[DONE]") {
-            break;
+          if (!trimmed.startsWith("data:")) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr || dataStr === "[DONE]") {
+            continue;
           }
-
           try {
-            const json = JSON.parse(dataStr);
-            const delta = json.choices?.[0]?.delta;
-            const content = delta?.content || "";
-            if (content) {
-              fullAnswer += content;
-              res.write(content);        // <- texte envoyé en direct au front
+            const parsed = JSON.parse(dataStr);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              answer += delta;
             }
-          } catch {
-            // ligne de contrôle non JSON, on ignore
+          } catch (e) {
+            // ignore parse errors
           }
         }
       }
     } catch (streamErr) {
-      log("Erreur pendant le streaming OpenAI:", streamErr);
-      res.write("\n[Erreur pendant le streaming IA]");
+      log("Erreur pendant le stream OpenAI:", streamErr);
     }
 
-    // On termine la réponse HTTP
-    if (!res.writableEnded) {
-      res.end();
-    }
+    // Si pour une raison quelconque on n'a rien récupéré, fallback en non-stream
+    if (!answer.trim()) {
+      log("Stream OpenAI vide, fallback en non-stream");
+      const rFallback = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: openAiModel,
+          temperature: 0.35,
+          messages: messagesForOpenAi,
+          max_completion_tokens: 700
+        })
+      });
 
-    // Mise à jour de la mémoire courte une fois la réponse complète connue
-    if (!isFollowUp) {
-      lastQuestionByIp[userIpKey] = effectiveQuestion;
-    }
-
-    history.push({ role: "user", content: finalUserMessage });
-    history.push({ role: "assistant", content: fullAnswer || "…" });
-    if (history.length > 12) {
-      history = history.slice(-12);
-    }
-    historyByIp[userIpKey] = history;
-
-    log("Streaming terminé, longueur réponse:", fullAnswer.length);
-  } catch (e) {
-    log("Erreur serveur (stream):", e);
-    if (!res.headersSent) {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.write("Erreur serveur interne.");
-    } else if (!res.writableEnded) {
-      res.write("\n[Erreur serveur interne]");
-    }
-    try {
-      if (!res.writableEnded) res.end();
-    } catch {}
-  }
-});
-
-        }
+      if (!rFallback.ok) {
+        const t2 = await rFallback.text();
+        log("OpenAI fallback error:", rFallback.status, t2);
+        return res.status(500).json({ error: "openai_error", detail: t2 });
       }
-    } catch (e) {
-      log("Erreur pendant le streaming OpenAI:", e);
-    }
 
-    const answer =
-      fullText.trim() ||
-      "Désolé, je n'ai pas pu générer de réponse.";
+      const j = await rFallback.json();
+      answer =
+        j.choices?.[0]?.message?.content ||
+        "Désolé, je n'ai pas pu générer de réponse.";
+    }
 
     if (!isFollowUp) {
       lastQuestionByIp[userIpKey] = effectiveQuestion;
@@ -1310,7 +1284,7 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
       country: aiClass ? aiClass.country : "france"
     });
   } catch (e) {
-    log("Erreur serveur (stream):", e);
+    log("Erreur serveur:", e);
     return res
       .status(500)
       .json({ error: "server_error", detail: String(e) });
@@ -1437,66 +1411,3 @@ app.get("*", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => log("TDIA server on http://localhost:" + port));
-
-/*
-=========================================================
-SNIPPET FRONTEND POUR LA PETITE BARRE LUMINEUSE PREMIUM
-=========================================================
-
-Dans ton CSS (par exemple public/style.css) :
-
-.recherche-bar-premium {
-  position: relative;
-  width: 110px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.15);
-  overflow: hidden;
-  border-radius: 999px;
-}
-
-.recherche-bar-premium::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -40px;
-  width: 40px;
-  height: 100%;
-  background: linear-gradient(to right, #5be7c4, #6a7dff);
-  opacity: 0.9;
-  filter: blur(0.3px);
-  animation: tdiabar-slide 1.4s linear infinite;
-}
-
-@keyframes tdiabar-slide {
-  from { left: -40px; }
-  to   { left: 120px; }
-}
-
-Dans ton HTML (zone statut IA) :
-
-<div id="tdia-status">
-  <span id="tdia-mode-label">TDIA réfléchis</span>
-  <div id="tdia-bar-container" style="margin-top:6px; display:none;">
-    <div class="recherche-bar-premium"></div>
-  </div>
-</div>
-
-Dans ton JS frontend, quand tu reçois la réponse JSON du serveur :
-
-// response = { reply, usedSearch, volatile, modeLabel, domain, country }
-
-document.getElementById("tdia-mode-label").textContent =
-  response.modeLabel || "TDIA réfléchis";
-
-const barContainer = document.getElementById("tdia-bar-container");
-if (response.modeLabel === "recherche approfondie") {
-  barContainer.style.display = "block";
-} else {
-  barContainer.style.display = "none";
-}
-
-Comme ça :
-- par défaut tu peux afficher "TDIA réfléchis"
-- si le backend renvoie modeLabel = "recherche approfondie" (usedSearch = true),
-  la petite barre premium apparaît, en animation infinie, tant que la réponse est en cours ou affichée.
-*/
