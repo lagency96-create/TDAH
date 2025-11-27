@@ -6,8 +6,7 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import multer from "multer"; // <-- images
-import http from "http";
+import multer from "multer";
 import { WebSocketServer } from "ws";
 
 dotenv.config();
@@ -902,85 +901,24 @@ OBJECTIF
 `;
 }
 
-// ================== COEUR TDIA (UTILISÉ PAR HTTP ET WEBSOCKET) ==================
+// ================== LOGIQUE COMMUNE /chat et WebSocket ==================
 
-async function runTdiaCore(rawMessageInput, userIp, {
-  streamCallback = null, // (delta: string)
-  onStart = null,        // (meta)
-  onEnd = null           // (metaWithAnswer)
-} = {}) {
-  if (!rawMessageInput || !String(rawMessageInput).trim()) {
-    throw new Error("message_manquant");
-  }
+function buildFollowUpRegex() {
+  return /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
+}
 
-  const rawMessage = String(rawMessageInput);
-  const userIpKey = userIp || "unknown_ip";
+function isFutureQuestionFn(qNorm) {
+  return /en 20(2[6-9]|3\d)|dans \d+ ans|année prochaine|l'année prochaine|dans le futur/.test(
+    qNorm
+  );
+}
 
-  log("Incoming message:", rawMessage, "from", userIpKey);
-
-  // Mode diagnostic
-  if (isDiagnosticMessage(rawMessage)) {
-    const diag = [];
-    const historyForIp = historyByIp[userIpKey] || [];
-
-    diag.push("Diagnostic TDIA :");
-    diag.push(`- OpenAI MODEL (principal): ${process.env.MODEL || "gpt-5.1"}`);
-    diag.push(
-      `- CLASSIFIER_MODEL: ${
-        process.env.CLASSIFIER_MODEL || "gpt-4o-mini"
-      }`
-    );
-    diag.push(
-      `- OPENAI_API_KEY: ${
-        process.env.OPENAI_API_KEY ? "présente" : "absente"
-      }`
-    );
-    const serpKeyPresent =
-      (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) ? "présente" : "absente";
-    diag.push(
-      `- SERPAPI_KEY / SERP_API_KEY: ${serpKeyPresent}`
-    );
-    diag.push(
-      `- Messages d'historique pour cette IP: ${historyForIp.length}`
-    );
-
-    try {
-      if (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) {
-        const testResults = await serpSearch("test google actualité", "fr", "fr");
-        diag.push(
-          `- Test SerpAPI: ${
-            testResults && testResults.length > 0
-              ? `OK (${testResults.length} résultats)`
-              : "aucun résultat utile"
-          }`
-        );
-      } else {
-        diag.push("- Test SerpAPI: impossible (clé absente)");
-      }
-    } catch (e) {
-      diag.push(`- Test SerpAPI: erreur (${String(e)})`);
-    }
-
-    const answer = diag.join("\n");
-    if (onStart) onStart({ modeLabel: "diagnostic", usedSearch: false });
-    if (streamCallback) streamCallback(answer);
-    if (onEnd) onEnd({ answer, usedSearch: false, volatile: false, modeLabel: "diagnostic", domain: null, country: "france" });
-    return {
-      answer,
-      usedSearch: false,
-      volatile: false,
-      modeLabel: "diagnostic",
-      domain: null,
-      country: "france"
-    };
-  }
-
-  // Gestion "rep à ma question"
-  const followUpRegex =
-    /(rep à ma question|rep a ma question|réponds à ma question|reponds a ma question|réponds à la question précédente|réponds à la question d’avant|réponds-moi|reponds moi|réponds y|réponds-y)$/i;
-
+// Fonction utilitaire qui contient toute la logique AVANT l'appel OpenAI
+async function prepareTdiaRequest(rawMessage, userIp) {
+  const followUpRegex = buildFollowUpRegex();
   const isFollowUp = followUpRegex.test(rawMessage.trim());
 
+  const userIpKey = userIp;
   let effectiveQuestion = rawMessage;
   if (isFollowUp && lastQuestionByIp[userIpKey]) {
     effectiveQuestion = lastQuestionByIp[userIpKey];
@@ -999,13 +937,7 @@ async function runTdiaCore(rawMessageInput, userIp, {
   const currentYear = now.getFullYear();
   const qNorm = normalizeText(effectiveQuestion);
 
-  // Détection questions sur le futur lointain
-  const isFutureQuestion =
-    /en 20(2[6-9]|3\d)|dans \d+ ans|année prochaine|l'année prochaine|dans le futur/.test(
-      qNorm
-    );
-
-  // Volatilité regex
+  const isFutureQuestion = isFutureQuestionFn(qNorm);
   const volatileRegex = isVolatileTopic(effectiveQuestion);
 
   const regexSuggestsWeb =
@@ -1019,7 +951,6 @@ async function runTdiaCore(rawMessageInput, userIp, {
       qNorm
     );
 
-  // Classifieur IA (gpt-4o-mini par défaut)
   let aiClass = await classifyQuestionWithAI(effectiveQuestion);
   if (aiClass) {
     log(
@@ -1053,7 +984,6 @@ async function runTdiaCore(rawMessageInput, userIp, {
   const domainIsHighVolatile =
     aiClass && highVolatileDomains.includes(aiClass.domain);
 
-  // NER / router pour pattern X vs Y
   const nerInfo = await analyzeEntitiesAndIntent(effectiveQuestion);
   let isVsSportsQuery = false;
   let vsEntities = [];
@@ -1077,7 +1007,6 @@ async function runTdiaCore(rawMessageInput, userIp, {
   const finalVolatile =
     volatileRegex || volatileFromAI || domainIsHighVolatile || isVsSportsQuery;
 
-  // Décision finale: doit-on déclencher une recherche web ?
   const forceSearch =
     !isFutureQuestion &&
     (needsWebFromAI ||
@@ -1168,14 +1097,14 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     }
   }
 
-  // ================== APPEL OPENAI AVEC STREAMING (TOKENS) ==================
   const openAiModel = process.env.MODEL || "gpt-5.1";
-  const modeLabel = usedSearch ? "recherche approfondie" : "TDIA réfléchis";
+  const modeLabel = forceSearch ? "recherche approfondie" : "TDIA réfléchis";
 
   let history = historyByIp[userIpKey] || [];
   const trimmedHistory = history.slice(-6);
 
-  const currentDateStr = now.toLocaleDateString("fr-FR", {
+  const now2 = new Date();
+  const currentDate2 = now2.toLocaleDateString("fr-FR", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -1183,36 +1112,99 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
   });
 
   const messagesForOpenAi = [
-    { role: "system", content: buildSystemPrompt(currentDateStr, finalVolatile) },
+    { role: "system", content: buildSystemPrompt(currentDate2, finalVolatile) },
     ...trimmedHistory,
     { role: "user", content: finalUserMessage }
   ];
 
-  log(
-    "Calling OpenAI (stream) with model:",
-    openAiModel,
-    "| usedSearch:",
-    usedSearch,
-    "| volatileFinal:",
+  return {
+    isFollowUp,
+    effectiveQuestion,
     finalVolatile,
-    "| modeLabel:",
+    usedSearch: forceSearch,
+    openAiModel,
     modeLabel,
-    "| historyMessagesSent:",
-    trimmedHistory.length
-  );
+    messagesForOpenAi,
+    history,
+    userIpKey
+  };
+}
 
-  if (onStart) {
-    onStart({
-      usedSearch,
-      volatile: finalVolatile,
-      modeLabel,
-      domain: aiClass ? aiClass.domain : null,
-      country: aiClass ? aiClass.country : "france"
-    });
+// ================== ROUTE /chat (HTTP, fallback non temps réel côté client) ==================
+
+app.post("/chat", async (req, res) => {
+  const { message } = req.body || {};
+  if (!message) {
+    return res.status(400).json({ error: "message manquant" });
   }
 
-  let answer = "";
+  const rawMessage = String(message);
+  const userIp = req.ip || "unknown_ip";
+
+  log("Incoming message:", rawMessage, "from", userIp);
+
+  // Mode diagnostic
+  if (isDiagnosticMessage(rawMessage)) {
+    const diag = [];
+    const historyForIp = historyByIp[userIp] || [];
+
+    diag.push("Diagnostic TDIA :");
+    diag.push(`- OpenAI MODEL (principal): ${process.env.MODEL || "gpt-5.1"}`);
+    diag.push(
+      `- CLASSIFIER_MODEL: ${
+        process.env.CLASSIFIER_MODEL || "gpt-4o-mini"
+      }`
+    );
+    diag.push(
+      `- OPENAI_API_KEY: ${
+        process.env.OPENAI_API_KEY ? "présente" : "absente"
+      }`
+    );
+    const serpKeyPresent =
+      (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) ? "présente" : "absente";
+    diag.push(
+      `- SERPAPI_KEY / SERP_API_KEY: ${serpKeyPresent}`
+    );
+    diag.push(
+      `- Messages d'historique pour cette IP: ${historyForIp.length}`
+    );
+
+    try {
+      if (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) {
+        const testResults = await serpSearch("test google actualité", "fr", "fr");
+        diag.push(
+          `- Test SerpAPI: ${
+            testResults && testResults.length > 0
+              ? `OK (${testResults.length} résultats)`
+              : "aucun résultat utile"
+          }`
+        );
+      } else {
+        diag.push("- Test SerpAPI: impossible (clé absente)");
+      }
+    } catch (e) {
+      diag.push(`- Test SerpAPI: erreur (${String(e)})`);
+    }
+
+    return res.json({ reply: diag.join("\n") });
+  }
+
   try {
+    const prep = await prepareTdiaRequest(rawMessage, userIp);
+
+    log(
+      "Calling OpenAI (stream interne HTTP) with model:",
+      prep.openAiModel,
+      "| usedSearch:",
+      prep.usedSearch,
+      "| volatileFinal:",
+      prep.finalVolatile,
+      "| modeLabel:",
+      prep.modeLabel,
+      "| historyMessagesSent:",
+      prep.messagesForOpenAi.length - 1
+    );
+
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1220,9 +1212,9 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: openAiModel,
+        model: prep.openAiModel,
         temperature: 0.35,
-        messages: messagesForOpenAi,
+        messages: prep.messagesForOpenAi,
         max_completion_tokens: 700,
         stream: true
       })
@@ -1231,136 +1223,94 @@ et propose à l'utilisateur de vérifier sur une source officielle si nécessair
     if (!r.ok) {
       const t = await r.text();
       log("OpenAI error:", r.status, t);
-      throw new Error("openai_error: " + t);
+      return res.status(500).json({ error: "openai_error", detail: t });
     }
 
+    let answer = "";
     let buffer = "";
 
-    // Lecture du stream SSE -> delta tokens
-    for await (const chunk of r.body) {
-      const textChunk = chunk.toString("utf8");
-      buffer += textChunk;
+    try {
+      for await (const chunk of r.body) {
+        const textChunk = chunk.toString("utf8");
+        buffer += textChunk;
 
-      let lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        let lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const dataStr = trimmed.slice(5).trim();
-        if (!dataStr || dataStr === "[DONE]") {
-          continue;
-        }
-        try {
-          const parsed = JSON.parse(dataStr);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            answer += delta;
-            if (streamCallback) {
-              streamCallback(delta);
-            }
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr || dataStr === "[DONE]") {
+            continue;
           }
-        } catch (e) {
-          // ignore parse errors
+          try {
+            const parsed = JSON.parse(dataStr);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              answer += delta;
+            }
+          } catch (e) {
+            // ignore parse errors
+          }
         }
       }
-    }
-  } catch (streamErr) {
-    log("Erreur pendant le stream OpenAI:", streamErr);
-  }
-
-  // Si aucun texte récupéré, fallback en non-stream
-  if (!answer.trim()) {
-    log("Stream OpenAI vide, fallback en non-stream");
-    const rFallback = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: openAiModel,
-        temperature: 0.35,
-        messages: messagesForOpenAi,
-        max_completion_tokens: 700
-      })
-    });
-
-    if (!rFallback.ok) {
-      const t2 = await rFallback.text();
-      log("OpenAI fallback error:", rFallback.status, t2);
-      throw new Error("openai_error: " + t2);
+    } catch (streamErr) {
+      log("Erreur pendant le stream OpenAI (HTTP):", streamErr);
     }
 
-    const j = await rFallback.json();
-    answer =
-      j.choices?.[0]?.message?.content ||
-      "Désolé, je n'ai pas pu générer de réponse.";
-    // Si on avait un streamCallback, on peut au moins envoyer la réponse complète
-    if (streamCallback) {
-      streamCallback(answer);
+    if (!answer.trim()) {
+      log("Stream OpenAI vide (HTTP), fallback en non-stream");
+      const rFallback = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: prep.openAiModel,
+          temperature: 0.35,
+          messages: prep.messagesForOpenAi,
+          max_completion_tokens: 700
+        })
+      });
+
+      if (!rFallback.ok) {
+        const t2 = await rFallback.text();
+        log("OpenAI fallback error (HTTP):", rFallback.status, t2);
+        return res.status(500).json({ error: "openai_error", detail: t2 });
+      }
+
+      const j = await rFallback.json();
+      answer =
+        j.choices?.[0]?.message?.content ||
+        "Désolé, je n'ai pas pu générer de réponse.";
     }
-  }
 
-  if (!isFollowUp) {
-    lastQuestionByIp[userIpKey] = effectiveQuestion;
-  }
+    if (!prep.isFollowUp) {
+      lastQuestionByIp[prep.userIpKey] = prep.effectiveQuestion;
+    }
 
-  history.push({ role: "user", content: finalUserMessage });
-  history.push({ role: "assistant", content: answer });
-  if (history.length > 12) {
-    history = history.slice(-12);
-  }
-  historyByIp[userIpKey] = history;
-
-  const meta = {
-    answer,
-    usedSearch,
-    volatile: finalVolatile,
-    modeLabel,
-    domain: aiClass ? aiClass.domain : null,
-    country: aiClass ? aiClass.country : "france"
-  };
-
-  if (onEnd) onEnd(meta);
-
-  return meta;
-}
-
-// ================== ROUTE /chat (TEXTE SEUL, HTTP JSON) ==================
-
-app.post("/chat", async (req, res) => {
-  const { message } = req.body || {};
-  if (!message) {
-    return res.status(400).json({ error: "message manquant" });
-  }
-  const userIp = req.ip || "unknown_ip";
-
-  try {
-    const meta = await runTdiaCore(message, userIp, {
-      // pas de streamCallback → on récupère juste la réponse finale
-      streamCallback: null,
-      onStart: null,
-      onEnd: null
-    });
+    prep.history.push({ role: "user", content: prep.messagesForOpenAi[prep.messagesForOpenAi.length - 1].content });
+    prep.history.push({ role: "assistant", content: answer });
+    if (prep.history.length > 12) {
+      prep.history = prep.history.slice(-12);
+    }
+    historyByIp[prep.userIpKey] = prep.history;
 
     return res.json({
-      reply: meta.answer,
-      usedSearch: meta.usedSearch,
-      volatile: meta.volatile,
-      modeLabel: meta.modeLabel,
-      domain: meta.domain,
-      country: meta.country
+      reply: answer,
+      usedSearch: prep.usedSearch,
+      volatile: prep.finalVolatile,
+      modeLabel: prep.modeLabel,
+      domain: null,
+      country: "france"
     });
   } catch (e) {
-    log("Erreur /chat:", e);
-    if (String(e.message || "").startsWith("message_manquant")) {
-      return res.status(400).json({ error: "message manquant" });
-    }
-    if (String(e.message || "").startsWith("openai_error")) {
-      return res.status(500).json({ error: "openai_error", detail: e.message });
-    }
-    return res.status(500).json({ error: "server_error", detail: String(e) });
+    log("Erreur serveur /chat:", e);
+    return res
+      .status(500)
+      .json({ error: "server_error", detail: String(e) });
   }
 });
 
@@ -1477,77 +1427,207 @@ app.post("/chat-image", upload.single("image"), async (req, res) => {
   }
 });
 
-// ================== WEBSOCKET STREAMING (VRAI LIVE TOKEN PAR TOKEN) ==================
+// ================== WEBSOCKET /ws POUR VRAI STREAMING TOKEN PAR TOKEN ==================
 
-// On crée le serveur HTTP et on attache un WebSocketServer dessus
 const port = process.env.PORT || 3000;
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const server = app.listen(port, () => log("TDIA server on http://localhost:" + port));
 
-wss.on("connection", (socket, req) => {
-  const userIp = req.socket.remoteAddress || "unknown_ip";
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+wss.on("connection", (socket, request) => {
+  const userIp = request.socket.remoteAddress || "unknown_ws";
   log("WebSocket connection from", userIp);
 
   socket.on("message", async (data) => {
-    let payload = null;
+    let parsed;
     try {
-      payload = JSON.parse(data.toString());
+      parsed = JSON.parse(data.toString());
     } catch (e) {
-      log("WS message non JSON ignoré");
+      log("WebSocket message JSON invalide");
       return;
     }
-    if (!payload || payload.type !== "user_message") return;
 
-    const message = payload.message || "";
-    if (!message || !String(message).trim()) {
-      socket.send(JSON.stringify({ type: "error", error: "message manquant" }));
+    if (!parsed || parsed.type !== "chat") return;
+
+    const rawMessage = String(parsed.message || "").trim();
+    if (!rawMessage) return;
+
+    // Mode diagnostic par WebSocket
+    if (isDiagnosticMessage(rawMessage)) {
+      const diag = [];
+      const historyForIp = historyByIp[userIp] || [];
+
+      diag.push("Diagnostic TDIA :");
+      diag.push(`- OpenAI MODEL (principal): ${process.env.MODEL || "gpt-5.1"}`);
+      diag.push(
+        `- CLASSIFIER_MODEL: ${
+          process.env.CLASSIFIER_MODEL || "gpt-4o-mini"
+        }`
+      );
+      diag.push(
+        `- OPENAI_API_KEY: ${
+          process.env.OPENAI_API_KEY ? "présente" : "absente"
+        }`
+      );
+      const serpKeyPresent =
+        (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) ? "présente" : "absente";
+      diag.push(
+        `- SERPAPI_KEY / SERP_API_KEY: ${serpKeyPresent}`
+      );
+      diag.push(
+        `- Messages d'historique pour cette IP: ${historyForIp.length}`
+      );
+
+      try {
+        if (process.env.SERPAPI_KEY || process.env.SERP_API_KEY) {
+          const testResults = await serpSearch("test google actualité", "fr", "fr");
+          diag.push(
+            `- Test SerpAPI: ${
+              testResults && testResults.length > 0
+                ? `OK (${testResults.length} résultats)`
+                : "aucun résultat utile"
+            }`
+          );
+        } else {
+          diag.push("- Test SerpAPI: impossible (clé absente)");
+        }
+      } catch (e) {
+        diag.push(`- Test SerpAPI: erreur (${String(e)})`);
+      }
+
+      socket.send(JSON.stringify({ type: "start" }));
+      socket.send(JSON.stringify({ type: "token", token: diag.join("\n") }));
+      socket.send(JSON.stringify({ type: "end" }));
       return;
     }
+
+    log("Incoming WS message:", rawMessage, "from", userIp);
 
     try {
-      // start événement
-      let startSent = false;
-      const metaRef = { value: null };
+      const prep = await prepareTdiaRequest(rawMessage, userIp);
 
-      await runTdiaCore(message, userIp, {
-        onStart: (meta) => {
-          metaRef.value = meta;
-          startSent = true;
-          socket.send(JSON.stringify({
-            type: "stream_start",
-            usedSearch: meta.usedSearch,
-            volatile: meta.volatile,
-            modeLabel: meta.modeLabel,
-            domain: meta.domain,
-            country: meta.country
-          }));
+      log(
+        "Calling OpenAI (stream WS) with model:",
+        prep.openAiModel,
+        "| usedSearch:",
+        prep.usedSearch,
+        "| volatileFinal:",
+        prep.finalVolatile,
+        "| modeLabel:",
+        prep.modeLabel,
+        "| historyMessagesSent:",
+        prep.messagesForOpenAi.length - 1
+      );
+
+      socket.send(JSON.stringify({ type: "start" }));
+
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
         },
-        streamCallback: (delta) => {
-          // delta = petit bout de texte
-          socket.send(JSON.stringify({
-            type: "stream_token",
-            token: delta
-          }));
-        },
-        onEnd: (meta) => {
-          socket.send(JSON.stringify({
-            type: "stream_end",
-            answer: meta.answer,
-            usedSearch: meta.usedSearch,
-            volatile: meta.volatile,
-            modeLabel: meta.modeLabel,
-            domain: meta.domain,
-            country: meta.country
-          }));
-        }
+        body: JSON.stringify({
+          model: prep.openAiModel,
+          temperature: 0.35,
+          messages: prep.messagesForOpenAi,
+          max_completion_tokens: 700,
+          stream: true
+        })
       });
 
+      if (!r.ok) {
+        const t = await r.text();
+        log("OpenAI error (WS):", r.status, t);
+        socket.send(JSON.stringify({ type: "error", error: "Erreur OpenAI: " + t }));
+        socket.send(JSON.stringify({ type: "end" }));
+        return;
+      }
+
+      let answer = "";
+      let buffer = "";
+
+      try {
+        for await (const chunk of r.body) {
+          const textChunk = chunk.toString("utf8");
+          buffer += textChunk;
+
+          let lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (!dataStr || dataStr === "[DONE]") {
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(dataStr);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                answer += delta;
+                socket.send(JSON.stringify({ type: "token", token: delta }));
+              }
+            } catch (e) {
+              // ignore parse errors
+            }
+          }
+        }
+      } catch (streamErr) {
+        log("Erreur pendant le stream OpenAI (WS):", streamErr);
+      }
+
+      if (!answer.trim()) {
+        log("Stream OpenAI vide (WS), fallback en non-stream");
+        const rFallback = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: prep.openAiModel,
+            temperature: 0.35,
+            messages: prep.messagesForOpenAi,
+            max_completion_tokens: 700
+          })
+        });
+
+        if (!rFallback.ok) {
+          const t2 = await rFallback.text();
+          log("OpenAI fallback error (WS):", rFallback.status, t2);
+          socket.send(JSON.stringify({ type: "error", error: "Erreur OpenAI: " + t2 }));
+          socket.send(JSON.stringify({ type: "end" }));
+          return;
+        }
+
+        const j = await rFallback.json();
+        answer =
+          j.choices?.[0]?.message?.content ||
+          "Désolé, je n'ai pas pu générer de réponse.";
+
+        socket.send(JSON.stringify({ type: "token", token: answer }));
+      }
+
+      if (!prep.isFollowUp) {
+        lastQuestionByIp[prep.userIpKey] = prep.effectiveQuestion;
+      }
+
+      prep.history.push({ role: "user", content: prep.messagesForOpenAi[prep.messagesForOpenAi.length - 1].content });
+      prep.history.push({ role: "assistant", content: answer });
+      if (prep.history.length > 12) {
+        prep.history = prep.history.slice(-12);
+      }
+      historyByIp[prep.userIpKey] = prep.history;
+
+      socket.send(JSON.stringify({ type: "end" }));
     } catch (e) {
-      log("Erreur côté WS/runTdiaCore:", e);
-      socket.send(JSON.stringify({
-        type: "error",
-        error: String(e && e.message ? e.message : e)
-      }));
+      log("Erreur serveur WebSocket:", e);
+      try {
+        socket.send(JSON.stringify({ type: "error", error: "Erreur serveur: " + String(e) }));
+        socket.send(JSON.stringify({ type: "end" }));
+      } catch (_) {}
     }
   });
 
@@ -1560,5 +1640,3 @@ wss.on("connection", (socket, req) => {
 app.get("*", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
-
-server.listen(port, () => log("TDIA server on http://localhost:" + port));
