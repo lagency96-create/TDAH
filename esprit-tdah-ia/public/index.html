@@ -4,25 +4,119 @@
   <meta charset="utf-8">
   <title>TDAI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
   <style>
-    /* Base */
-    html,body{margin:0;padding:0;height:100%;background:#0c0f19;overflow:hidden}
-    :root{
-      --safe-b: env(safe-area-inset-bottom,0px);
-      --composer-h: 96px;   /* updated at runtime */
+    /* =========================
+       BASE EXISTANTE
+    ========================== */
+    html,body{
+      margin:0;
+      padding:0;
+      height:100%;
+      background:#0c0f19;
+      overflow:hidden;
     }
 
-    /* App shell */
+    :root{
+      --composer-h: 96px;
+    }
+
     .tdai-app{
-      --bg0:#0c0f19;--bg1:#0f1424;--bg2:#121831;--txt:#e9ebf3;--dim:#a7afc7;
-      --brand:#6a7dff;--acc:#5be7c4;--br:#232a4d;--bubU:#0b2c55;--bubA:#161f3d;
+      --bg0:#0c0f19;
+      --bg1:#0f1424;
+      --bg2:#121831;
+      --txt:#e9ebf3;
+      --dim:#a7afc7;
+      --brand:#6a7dff;
+      --acc:#5be7c4;
+      --br:#232a4d;
+      --bubU:#0b2c55;
+      --bubA:#161f3d;
 
       color:var(--txt);
       font:400 16px/1.6 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
       background:linear-gradient(180deg,var(--bg0)0%,var(--bg1)60%,var(--bg2)100%);
       width:100%;
-      height:100svh;              /* true viewport height incl. safari UI */
+      height:100svh;
       min-height:100svh;
       display:flex;
     }
-    .tdai-wrap{flex
+
+    /* =========================
+       TOP BAR (AJOUT MINIMAL)
+    ========================== */
+    .tdai-topbar{
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-radius: 14px;
+      background: rgba(10, 18, 35, 0.35);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(10px);
+      z-index: 9999;
+    }
+
+    .tdai-topbar .brand{
+      text-decoration: none;
+      color: rgba(255,255,255,0.9);
+      letter-spacing: 0.18em;
+      font-size: 14px;
+    }
+
+    .tdai-topbar .links{
+      display:flex;
+      gap: 10px;
+    }
+
+    .tdai-topbar .link{
+      text-decoration:none;
+      color: rgba(255,255,255,0.75);
+      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .tdai-topbar .link:hover{
+      color: rgba(255,255,255,0.92);
+      border-color: rgba(255,255,255,0.12);
+    }
+
+    .tdai-topbar .link.active{
+      color: rgba(255,255,255,0.95);
+      border-color: rgba(120,200,255,0.25);
+      background: rgba(120,200,255,0.10);
+    }
+
+    /* pour que le contenu ne passe pas sous la barre */
+    body{
+      padding-top: 80px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- TOP BAR -->
+  <nav class="tdai-topbar">
+    <a class="brand" href="/">TDAI</a>
+    <div class="links">
+      <a class="link active" href="/">IA</a>
+      <a class="link" href="/audio">Audio</a>
+    </div>
+  </nav>
+
+  <!-- APP EXISTANTE -->
+  <div class="tdai-app">
+    <!-- TOUT TON CONTENU ACTUEL RESTE ICI -->
+  </div>
+
+</body>
+</html>
